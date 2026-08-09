@@ -53,8 +53,10 @@ class Reply:
 class RpcChannel:
     """Sends commands and matches replies by id.
 
-    Replies are buffered by id rather than assumed to arrive in order, because ``run <scenario>``
-    re-enters the command path per line and a nested reply can legitimately land first.
+    Replies are matched by id rather than by arrival order. Nothing currently replies out of order --
+    there is exactly one emit site in the jar, in the rpc branch, so a scenario run through
+    ``run`` produces one reply and not one per line -- but matching on the id is what makes that a
+    property of the jar rather than an assumption this side depends on.
     """
 
     def __init__(self, server: HarnessServer) -> None:
@@ -62,6 +64,8 @@ class RpcChannel:
         self._next_id = 1
         self._pending: dict[str, Reply] = {}
         self._reader = server.rpc_path.open("r", errors="replace")
+        #: Holds a partial line between reads. See _drain for why that happens.
+        self._buffer = ""
 
     def close(self) -> None:
         try:
@@ -104,13 +108,21 @@ class RpcChannel:
                 time.sleep(0.005)
 
     def _drain(self) -> bool:
-        """Reads whatever replies are available. True if anything was read."""
-        read_any = False
-        while True:
-            line = self._reader.readline()
-            if not line:
-                return read_any
+        """Parses whatever complete replies are available. True if at least one was parsed.
 
+        Reads into a buffer and only parses up to the last newline, because a reply can be observed
+        half-written. The jar writes the JSON, then the newline, then flushes -- so a reply larger
+        than the writer's buffer flushes partway through a line, and a reply carrying every line a
+        scenario logged gets there easily. Parsing a fragment would fail as unparseable JSON, which
+        is a confusing way to report "read too early".
+        """
+        chunk = self._reader.read()
+        if chunk:
+            self._buffer += chunk
+
+        parsed_any = False
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
             line = line.strip()
             if not line:
                 continue
@@ -130,4 +142,6 @@ class RpcChannel:
                 error=raw.get("error"),
             )
             self._pending[reply.id] = reply
-            read_any = True
+            parsed_any = True
+
+        return parsed_any

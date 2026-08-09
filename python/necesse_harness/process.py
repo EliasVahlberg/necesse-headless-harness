@@ -76,6 +76,7 @@ class HarnessServer:
     def __init__(self, config: ServerConfig | None = None) -> None:
         self.config = config or ServerConfig()
         self.process: subprocess.Popen | None = None
+        self._log_sink = None
         self.log_path: Path
         self.rpc_path: Path
         self._boot_time = 0.0
@@ -183,12 +184,15 @@ class HarnessServer:
             command += ["-mod", f"{self.config.mod_under_test}/"]
 
         self._boot_time = time.time()
+        # Held so stop() can close it. Left to the garbage collector it survives as long as the
+        # object does, which for a session-scoped fixture is the whole run.
+        self._log_sink = self.log_path.open("wb")
         self.process = subprocess.Popen(
             command,
             cwd=self.config.game_dir,
             stdin=subprocess.PIPE,
             # A file, not a pipe: see the module docstring.
-            stdout=self.log_path.open("wb"),
+            stdout=self._log_sink,
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
@@ -242,6 +246,10 @@ class HarnessServer:
 
         if self.process.stdin:
             self.process.stdin.close()
+
+        if self._log_sink is not None:
+            self._log_sink.close()
+            self._log_sink = None
 
         self.process = None
 

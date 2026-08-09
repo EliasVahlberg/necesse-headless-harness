@@ -59,9 +59,19 @@ class Harness:
 
         return reply
 
-    def as_scenario(self) -> str:
-        """Everything sent so far, as scenario lines that can be pasted into a live server."""
-        return "\n".join(f"harness {line}" for line in self._history)
+    #: How many commands a failure message reproduces. The session fixture keeps one harness for the
+    #: whole run, so the untruncated history would be hundreds of lines in every error -- and the
+    #: lines that explain a failure are the ones just before it.
+    SCENARIO_TAIL = 15
+
+    def as_scenario(self, limit: int = SCENARIO_TAIL) -> str:
+        """The last few commands, as scenario lines that can be pasted into a live server."""
+        recent = self._history[-limit:]
+        lines = [f"harness {line}" for line in recent]
+        if len(self._history) > limit:
+            lines.insert(0, f"# ... {len(self._history) - limit} earlier commands omitted")
+
+        return "\n".join(lines)
 
     def close(self) -> None:
         self.rpc.close()
