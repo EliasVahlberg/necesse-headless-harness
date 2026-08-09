@@ -41,6 +41,7 @@ import necesse.inventory.Inventory;
 import necesse.inventory.InventorySlot;
 import necesse.inventory.InventoryItem;
 import necesse.inventory.item.Item;
+import necesse.inventory.item.ItemCategory;
 import necesse.inventory.container.Container;
 import necesse.inventory.container.ContainerAction;
 import necesse.inventory.container.ContainerActionResult;
@@ -719,7 +720,9 @@ public class HarnessCommand extends ChatCommand {
       "expect", "query", "player", "run", "echo", "hello", "rpc");
 
    /** Kinds {@code expect} and {@code query} both understand without a consumer mod. */
-   private static final List<String> BUILT_IN_KINDS = Arrays.asList("item", "total", "held");
+   // 'category' and 'categories' answer about the item registry rather than about the level, so they
+   // are queries with no expect counterpart -- there is nothing to assert, only something to read.
+   private static final List<String> BUILT_IN_KINDS = Arrays.asList("item", "total", "held", "category", "categories");
 
    /**
     * Structured fields for the reply currently being assembled, or null when a verb was invoked by
@@ -864,6 +867,29 @@ public class HarnessCommand extends ChatCommand {
          }
 
          data.str("item", args.get(2)).num("count", this.countHeld(serverClient, args.get(2)));
+      } else if ("category".equals(kind)) {
+         Item item = ItemRegistry.getItem(args.get(2));
+         if (item == null) {
+            logs.add("FAIL no such item '" + args.get(2) + "'");
+            return false;
+         }
+
+         // Innermost category first, so chain[last] is the top-level one. Reported as the chain
+         // rather than as one name because a category filter is a question about ancestry: an item
+         // is "a material" through its parents, never directly.
+         List<String> chain = new ArrayList<>();
+         for (ItemCategory category = ItemCategory.getItemsCategory(item); category != null
+               && category.parent != null; category = category.parent) {
+            chain.add(category.stringID);
+         }
+
+         data.str("item", args.get(2)).strings("chain", chain);
+      } else if ("categories".equals(kind)) {
+         // The game's top-level categories, as the running game has them rather than as a grep of
+         // the source suggests. Any mod loaded alongside contributes to this too.
+         List<String> top = new ArrayList<>();
+         ItemCategory.masterCategory.getChildren().forEach(category -> top.add(category.stringID));
+         data.strings("top", top);
       } else if ("item".equals(kind)) {
          int x = spawn.x + Integer.parseInt(args.get(2));
          int y = spawn.y + Integer.parseInt(args.get(3));

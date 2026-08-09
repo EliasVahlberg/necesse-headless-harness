@@ -78,3 +78,24 @@ def test_a_failed_assertion_is_reported_as_a_failure_not_a_crash(harness):
     assert reply.ok is False
     assert reply.error is None, "a failed assertion must not look like an exception"
     assert "expected 999, found 40" in reply.failures()[0].text
+
+
+def test_the_games_top_level_categories_are_what_the_source_suggested(harness):
+    """Turns an inference into an observation.
+
+    The category picker in a consumer mod is built from this tree, and the set was originally read
+    off a grep of `setItemCategory` call sites -- which counts call sites, not categories. This asks
+    the running game instead.
+    """
+    top = set(harness.query("categories")["top"])
+    assert {"objects", "materials", "consumable", "equipment", "misc"} <= top
+    # Small enough to present as a menu, which is what makes a dropdown over the real taxonomy
+    # viable where a fixed row of icon buttons would have to invent buckets.
+    assert len(top) <= 12, f"more top-level categories than a menu can carry: {sorted(top)}"
+
+
+def test_an_item_belongs_to_its_category_through_its_ancestors(harness):
+    """The walk a category filter performs, checked on an item whose place is not in doubt."""
+    chain = harness.query("category", "ironbar")["chain"]
+    assert chain[-1] == "materials", f"ironbar's top-level category is {chain[-1]}"
+    assert "bars" in chain

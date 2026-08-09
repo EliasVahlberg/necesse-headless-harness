@@ -1,5 +1,7 @@
 # Thin wrapper so the Necesse mod build behaves like cargo/cmake:
 PY = $(CURDIR)/.venv/bin/python
+# Where the game looks for installed mods. Not the game install: appdata.
+MODS_DIR ?= $(HOME)/.config/Necesse/mods
 # one short command, output streams live, exit status is real, never hangs.
 #
 # Three rules encoded here, each fixing a specific failure we hit:
@@ -90,6 +92,14 @@ doctor: ## Verify the toolchain assumptions on this machine
 	@test -f "$$(grep -oP '(?<=^org.gradle.java.home=).*' gradle.properties)/lib/libawt_xawt.so" \
 		&& echo "AWT         : headful" \
 		|| echo "AWT         : HEADLESS JVM (runServer cannot work; error dialogs throw instead of showing)"
+
+install: build ## Copy the built jar into the game's mods folder
+	@mkdir -p $(MODS_DIR)
+	@# Remove older versions first: two copies of the same mod id is a load error, and the
+	@# staleness guard in the Python client compares against whatever is here.
+	@rm -f $(MODS_DIR)/NecesseHeadlessHarness-*.jar
+	@cp build/jar/NecesseHeadlessHarness-*.jar $(MODS_DIR)/
+	@echo "installed to $(MODS_DIR)"
 
 pytest: ## Run the Python suite (needs .venv: make venv)
 	@$(PY) -m pytest tests/python -q
