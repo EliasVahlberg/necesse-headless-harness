@@ -1,4 +1,4 @@
-# Necesse Test Kit
+# Necesse Headless Harness
 
 A headless integration test harness for Necesse mods. It drives a real dedicated server from
 plain-text scenario files — placing objects, filling containers, opening UIs, clicking slots,
@@ -22,26 +22,26 @@ go and look.
 ## What a scenario looks like
 
 ```
-testkit clear 8
-testkit place storagebox 3 0
-testkit fill 3 0 ironbar 25
-testkit expect item 3 0 ironbar 25
+harness clear 8
+harness place storagebox 3 0
+harness fill 3 0 ironbar 25
+harness expect item 3 0 ironbar 25
 
-testkit player spawn
-testkit give ironbar 10
-testkit open 3 0
-testkit quickstack
-testkit expect held ironbar 0
-testkit expect item 3 0 ironbar 35
-testkit expect total ironbar 35
-testkit player despawn
+harness player spawn
+harness give ironbar 10
+harness open 3 0
+harness quickstack
+harness expect held ironbar 0
+harness expect item 3 0 ironbar 35
+harness expect total ironbar 35
+harness player despawn
 ```
 
 Every line is a server console command, so any prefix of a scenario can be pasted into a live
 server to debug a failure by hand. That is deliberate: the format is data, not code.
 
 Note what that example does *not* mention: this mod. It places a vanilla chest and quick-stacks
-into it. **The kit can drive a mod whose source you do not have**, because the verbs address
+into it. **The harness can drive a mod whose source you do not have**, because the verbs address
 everything by string ID.
 
 ## The player is not a person
@@ -56,7 +56,7 @@ inventory. Without it, every container test needs a human.
 
 ## Install
 
-The kit is a **normal installed mod**, not something you copy into your source, and not a dev mod.
+The harness is a **normal installed mod**, not something you copy into your source, and not a dev mod.
 
 ```bash
 make install        # builds and copies the jar into ~/.config/Necesse/mods/
@@ -74,7 +74,7 @@ rather than in every mod that copied it. And nothing test-related ends up in you
 ## Run
 
 ```bash
-# prove the kit works in your install, before blaming your own mod
+# prove the harness works in your install, before blaming your own mod
 tools/run_scenario.sh tests/scenarios/selfcheck.txt
 
 # your mod
@@ -82,7 +82,7 @@ MOD_UNDER_TEST=/path/to/yourmod/build/jar \
    tools/run_scenario.sh /path/to/yourmod/tests/scenarios/*.txt
 ```
 
-Environment: `MOD_UNDER_TEST` (dev mod's jar directory; empty runs the kit alone),
+Environment: `MOD_UNDER_TEST` (dev mod's jar directory; empty runs the harness alone),
 `SCENARIO_DIR` (where `run <name>` looks; defaults to the first scenario's directory),
 `HARNESS_WORLD` (must contain `harness`, since a fresh run deletes it), `HARNESS_DEADLINE`,
 `NECESSE_GAME_DIR`.
@@ -118,22 +118,22 @@ Coordinates are **relative to the world spawn tile**, so scenarios do not depend
 
 ```java
 public void postInit() {
-   TestKit.registerObjectAlias("unit", "mymodstorageunit");
-   TestKit.registerExpectation(new MyCapacityExpectation());   // expect capacity <dx> <dy> <n>
-   TestKit.registerVerb(new MyBenchmarkVerb());                // a whole new verb
+   Harness.registerObjectAlias("unit", "mymodstorageunit");
+   Harness.registerExpectation(new MyCapacityExpectation());   // expect capacity <dx> <dy> <n>
+   Harness.registerVerb(new MyBenchmarkVerb());                // a whole new verb
 }
 ```
 
-Registering over something the kit ships is allowed and intended. The built-in `expect item`
+Registering over something the harness ships is allowed and intended. The built-in `expect item`
 counts one tile's inventory, which is right for a chest and wrong for anything that aggregates
 across containers — so a mod must be able to redefine the word rather than invent a second one
 meaning the same thing.
 
-**The soft-dependency trap.** Declare the kit under `optionalDependencies`, then keep every
+**The soft-dependency trap.** Declare the harness under `optionalDependencies`, then keep every
 reference to kit types inside one class that nothing else touches, and call it from a
-`try/catch (Throwable)`. With the kit absent, merely *loading* a class that mentions a missing
+`try/catch (Throwable)`. With the harness absent, merely *loading* a class that mentions a missing
 type throws `NoClassDefFoundError`, which is an `Error` and not caught by `catch (Exception)`.
-Get this wrong and players without the kit cannot load your mod at all.
+Get this wrong and players without the harness cannot load your mod at all.
 
 ## There is no CI, and there cannot be
 

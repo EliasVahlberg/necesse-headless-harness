@@ -1,51 +1,51 @@
-# The kit checking itself, against vanilla objects only.
+# The harness checking itself, against vanilla objects only.
 #
 # Run this before debugging your own mod. It answers a question that is otherwise expensive to
-# separate: is the kit working in this install, or is my mod broken? If this passes and your own
+# separate: is the harness working in this install, or is my mod broken? If this passes and your own
 # scenario does not, the fault is yours, and that is worth knowing in ten seconds rather than an
 # hour.
 #
 # It deliberately uses nothing but the game's own content -- a Storagebox, iron bars, stone -- so
 # it needs no mod under test at all, and so it keeps working when your mod does not compile.
 
-testkit echo --- kit selfcheck ---
+harness echo --- harness selfcheck ---
 
 # Somewhere flat and empty to work in. Radius rather than the whole level, since that is all the
 # verb covers, and every coordinate below is inside it.
-testkit clear 8
+harness clear 8
 
 # A vanilla chest, addressed by its object string ID. Nothing here knows about any mod, which is
 # the point: the same verbs drive a mod whose source you have never seen.
-testkit place storagebox 3 0
-testkit expect item 3 0 ironbar 0
+harness place storagebox 3 0
+harness expect item 3 0 ironbar 0
 
-testkit fill 3 0 ironbar 25
-testkit expect item 3 0 ironbar 25
-testkit expect total ironbar 25
+harness fill 3 0 ironbar 25
+harness expect item 3 0 ironbar 25
+harness expect total ironbar 25
 
 # A player that is not a person. Everything below this line is the part that supposedly cannot be
 # tested without someone sitting at the keyboard.
-testkit player spawn
-testkit expect held ironbar 0
+harness player spawn
+harness expect held ironbar 0
 
-testkit give ironbar 10
-testkit expect held ironbar 10
+harness give ironbar 10
+harness expect held ironbar 10
 
 # Open the chest, which goes through GameObject.interact -- the same door a player uses, and the
 # same one a modded container opens through.
-testkit open 3 0
+harness open 3 0
 
 # Quick stack tops up what the container already holds. This works against a vanilla chest
 # because QUICK_STACK_SLOT is an engine-level slot convention, not something a mod invents.
-testkit quickstack
-testkit expect held ironbar 0
-testkit expect item 3 0 ironbar 35
+harness quickstack
+harness expect held ironbar 0
+harness expect item 3 0 ironbar 35
 
 # Conservation: the chest gained exactly what the player lost, and nothing appeared or vanished.
 # This is the assertion that catches an off-by-one which a per-container check would not.
-testkit expect total ironbar 35
+harness expect total ironbar 35
 
-testkit close
-testkit player despawn
+harness close
+harness player despawn
 
-testkit echo --- kit selfcheck done ---
+harness echo --- harness selfcheck done ---

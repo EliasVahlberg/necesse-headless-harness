@@ -5,8 +5,8 @@ plugins {
 // Mod identity. Project name lives in settings.gradle.
 // To change the project name, edit the settings.gradle file
 
-project.ext.modID = "elias.necessetestkit" // The unique id of your mod. Must be all lowercase and cannot use special characters.
-project.ext.modName = "Necesse Test Kit" // The display name of your mod.
+project.ext.modID = "elias.necesseheadlessharness" // The unique id of your mod. Must be all lowercase and cannot use special characters.
+project.ext.modName = "Necesse Headless Harness" // The display name of your mod.
 project.ext.modVersion = "0.1.0" // Your current builds version. Must follow the xx.xx... format.
 project.ext.gameVersion = "1.3.2" // The target game version.
 project.ext.modDescription = "A headless integration test harness for Necesse mods. Drives a real dedicated server from scenario files, including a socketless player, so container and world behaviour can be asserted without a person playing the game." // Short description of what your mod is.
@@ -204,19 +204,19 @@ def getDefaultGamePath() {
 }
 
 // =================================================
-// ========== Test Kit additions ===================
+// ========== Harness additions ===================
 // =================================================
 // Appended at the tail on purpose: everything above is upstream ExampleMod, so keeping
 // additions here is the most merge-friendly place for them.
 
-// The kit loads as a normal installed mod rather than a dev mod, because the game allows
+// The harness loads as a normal installed mod rather than a dev mod, because the game allows
 // exactly one dev mod: DevModProvider.devMod is a single String, and
 // LoadedDevMod.validateDevFolderAndReturnJar rejects a dev folder holding more than one file.
-// The mod under test keeps the dev slot; the kit goes in the mods folder, which
+// The mod under test keeps the dev slot; the harness goes in the mods folder, which
 // DesktopPlatform registers a provider for on dedicated servers too.
 tasks.register('install') {
     group "necesse"
-    description "Copies the built jar into the game's mods folder, where the kit is meant to live"
+    description "Copies the built jar into the game's mods folder, where the harness is meant to live"
     dependsOn "buildModJar"
 
     doLast {
@@ -224,7 +224,7 @@ tasks.register('install') {
         mods.mkdirs()
         // Remove older builds of THIS mod only, so a stale version cannot win the load.
         mods.listFiles()?.each { f ->
-            if (f.name.startsWith("NecesseTestKit-") && f.name.endsWith(".jar")) {
+            if (f.name.startsWith("NecesseHeadlessHarness-") && f.name.endsWith(".jar")) {
                 delete f
             }
         }
@@ -239,7 +239,7 @@ tasks.register('install') {
 tasks.named('runServer') {
     executable = "${gameDirectory}/jre/bin/java"
     args '-nogui', '-log_debug_prints'
-    args '-world', (project.findProperty('necesseServerWorld') ?: 'testkit_harness')
+    args '-world', (project.findProperty('necesseServerWorld') ?: 'headless_harness')
     standardInput = System.in
 }
 

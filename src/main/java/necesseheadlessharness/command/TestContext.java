@@ -1,4 +1,4 @@
-package necessetestkit.command;
+package necesseheadlessharness.command;
 
 import java.awt.Point;
 import java.util.ArrayList;

@@ -1,4 +1,4 @@
-package necessetestkit;
+package necesseheadlessharness;
 
 import necesse.engine.modLoader.annotations.ModMethodPatch;
 import necesse.level.maps.Level;

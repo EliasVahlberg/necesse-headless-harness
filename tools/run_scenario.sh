@@ -61,7 +61,7 @@ for f in "$@"; do
    fi
 done
 
-WORLD="${HARNESS_WORLD:-testkit_harness}"
+WORLD="${HARNESS_WORLD:-headless_harness}"
 
 # The runner deletes the world it is given, so refuse to touch one not obviously disposable.
 # A world used for manual testing is real work; a world the harness generates is not.
@@ -74,7 +74,7 @@ KIT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Resolve the mod under test and the scenario root BEFORE changing directory, since both may
 # be given as paths relative to where the caller stood.
-# Unset means no mod under test, which is a legitimate case: it is how the kit checks itself.
+# Unset means no mod under test, which is a legitimate case: it is how the harness checks itself.
 # Empty is different from wrong, so only a path that was given and does not exist is an error.
 if [[ -n "${MOD_UNDER_TEST:-}" ]]; then
    RESOLVED="$(cd "$MOD_UNDER_TEST" 2>/dev/null && pwd || true)"
@@ -98,15 +98,15 @@ if [[ -z "$GAME_DIR" || ! -f "$GAME_DIR/Server.jar" ]]; then
    exit 2
 fi
 
-# The kit runs from the mods folder, not from build/jar, so building it is not enough -- the
-# installed copy is what the server loads. Getting this wrong presents as a verb the kit "does not
+# The harness runs from the mods folder, not from build/jar, so building it is not enough -- the
+# installed copy is what the server loads. Getting this wrong presents as a verb the harness "does not
 # have", with a usage line listing the verbs of whichever build is installed. Cheap to detect,
 # confusing to diagnose, so check rather than document.
-INSTALLED_KIT="$(ls -1t "$HOME/.config/Necesse/mods"/NecesseTestKit-*.jar 2>/dev/null | head -1)"
-BUILT_KIT="$(ls -1t "$KIT_DIR/build/jar"/NecesseTestKit-*.jar 2>/dev/null | head -1)"
+INSTALLED_KIT="$(ls -1t "$HOME/.config/Necesse/mods"/NecesseHeadlessHarness-*.jar 2>/dev/null | head -1)"
+BUILT_KIT="$(ls -1t "$KIT_DIR/build/jar"/NecesseHeadlessHarness-*.jar 2>/dev/null | head -1)"
 
 if [[ -z "$INSTALLED_KIT" ]]; then
-   echo "FAIL  the test kit is not installed. Run 'make install' in the kit: the game loads it from" >&2
+   echo "FAIL  the harness is not installed. Run 'make install' in the kit: the game loads it from" >&2
    echo "      ~/.config/Necesse/mods, because -mod accepts only one dev mod and your mod has it." >&2
    exit 2
 fi
@@ -175,7 +175,7 @@ CRASH_BEFORE="$(stat -c %Y "$CRASH_LOG" 2>/dev/null || echo 0)"
 # deadlock came to look like a 400-second test run rather than a failure.
 DEADLINE="${HARNESS_DEADLINE:-180}"
 
-( cd "$GAME_DIR" && "$JAVA" -Dnecessetestkit.scenarios="$SCENARIO_DIR" -jar Server.jar \
+( cd "$GAME_DIR" && "$JAVA" -Dnecesseheadlessharness.scenarios="$SCENARIO_DIR" -jar Server.jar \
       -nogui -log_debug_prints -hiddencheats \
       -world "$WORLD" \
       ${MOD_UNDER_TEST:+-mod "$MOD_UNDER_TEST/"} ) < "$FIFO" > "$LOG" 2>&1 &
@@ -225,7 +225,7 @@ for scenario in "$@"; do
       continue
    fi
 
-   printf 'testkit echo === BEGIN %s ===\n' "$name" >&3
+   printf 'harness echo === BEGIN %s ===\n' "$name" >&3
 
    while IFS= read -r line || [[ -n "$line" ]]; do
       line="${line%%$'\r'}"
@@ -241,7 +241,7 @@ for scenario in "$@"; do
       printf '%s\n' "$line" >&3
    done < "$scenario"
 
-   printf 'testkit echo === END %s ===\n' "$name" >&3
+   printf 'harness echo === END %s ===\n' "$name" >&3
    RAN+=("$name")
 done
 

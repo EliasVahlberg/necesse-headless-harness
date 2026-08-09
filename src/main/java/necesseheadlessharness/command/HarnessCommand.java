@@ -1,4 +1,4 @@
-package necessetestkit.command;
+package necesseheadlessharness.command;
 
 import java.awt.Point;
 import java.io.IOException;
@@ -14,9 +14,9 @@ import java.util.Map;
 
 import necesse.engine.commands.AutoComplete;
 import necesse.engine.commands.ChatCommand;
-import necessetestkit.HeadlessPlayer;
-import necessetestkit.TestKit;
-import necessetestkit.ServerThreadTasks;
+import necesseheadlessharness.HeadlessPlayer;
+import necesseheadlessharness.Harness;
+import necesseheadlessharness.ServerThreadTasks;
 import necesse.engine.commands.CommandLog;
 import necesse.engine.commands.ParsedCommand;
 import necesse.engine.commands.PermissionLevel;
@@ -61,13 +61,13 @@ import necesse.level.maps.regionSystem.RegionManager;
  * can run it non-interactively, and so it also works in a singleplayer session where
  * assertions that need a real player can be checked.
  */
-public class TestKitCommand extends ChatCommand {
+public class HarnessCommand extends ChatCommand {
 
    /** Guards against a scenario file that calls {@code run} on itself. */
    private boolean running = false;
 
-   public TestKitCommand() {
-      super("testkit", PermissionLevel.OWNER);
+   public HarnessCommand() {
+      super("harness", PermissionLevel.OWNER);
    }
 
    @Override
@@ -183,7 +183,7 @@ public class TestKitCommand extends ChatCommand {
             case "player":
                return this.player(server, level, args, logs);
             default:
-               TestVerb verb = TestKit.verb(sub);
+               TestVerb verb = Harness.verb(sub);
                if (verb == null) {
                   logs.add("FAIL unknown subcommand '" + sub + "'; usage: " + this.getUsage());
                   return false;
@@ -210,12 +210,12 @@ public class TestKitCommand extends ChatCommand {
       int x = spawn.x + Integer.parseInt(args.get(2));
       int y = spawn.y + Integer.parseInt(args.get(3));
 
-      String stringID = TestKit.resolveObject(what);
+      String stringID = Harness.resolveObject(what);
       int objectID = ObjectRegistry.getObjectID(stringID);
       if (objectID <= 0) {
          logs.add("FAIL unknown object '" + what + "'"
             + (stringID.equals(what) ? "" : "' (alias for '" + stringID + "')")
-            + "; pass an object string ID, or register an alias with TestKit.registerObjectAlias");
+            + "; pass an object string ID, or register an alias with Harness.registerObjectAlias");
          return false;
       }
 
@@ -291,11 +291,11 @@ public class TestKitCommand extends ChatCommand {
                           ArrayList<String> args, CommandLog logs) {
       String kind = args.get(1).toLowerCase();
 
-      // A registered expectation wins over a built-in of the same name, deliberately. The kit's
+      // A registered expectation wins over a built-in of the same name, deliberately. The harness's
       // 'item' counts what is in the inventory at a tile, which is right for a chest and wrong
       // for anything that aggregates -- so a mod must be able to redefine it rather than being
       // forced to invent a differently-named assertion for the same idea.
-      TestVerb registered = TestKit.expectation(kind);
+      TestVerb registered = Harness.expectation(kind);
       if (registered != null) {
          if (registered.needsPlayer() && this.requirePlayer(serverClient, logs, "expect " + kind) == null) {
             return false;
@@ -352,7 +352,7 @@ public class TestKitCommand extends ChatCommand {
       }
 
       StringBuilder known = new StringBuilder("'item', 'total', 'held'");
-      for (String extra : TestKit.expectationKinds()) {
+      for (String extra : Harness.expectationKinds()) {
          known.append(", '").append(extra).append("'");
       }
 
@@ -588,7 +588,7 @@ public class TestKitCommand extends ChatCommand {
     * vanilla commands, and any line can be pasted into chat on its own to investigate a
     * failure. Composition belongs in the files; this class only supplies primitives.
     *
-    * <p>The directory comes from {@code -Dnecessetestkit.scenarios} and a name cannot escape
+    * <p>The directory comes from {@code -Dnecesseheadlessharness.scenarios} and a name cannot escape
     * it, so this does not become a way to read arbitrary files off the host.
     */
    private boolean runScenario(Server server, ServerClient serverClient, ArrayList<String> args, CommandLog logs) {
@@ -597,9 +597,9 @@ public class TestKitCommand extends ChatCommand {
          return false;
       }
 
-      String root = System.getProperty("necessetestkit.scenarios");
+      String root = System.getProperty("necesseheadlessharness.scenarios");
       if (root == null) {
-         logs.add("FAIL scenario directory unknown: launch with -Dnecessetestkit.scenarios=<dir> "
+         logs.add("FAIL scenario directory unknown: launch with -Dnecesseheadlessharness.scenarios=<dir> "
             + "(make run PACKETLOG=1 and the harness scripts set it already)");
          return false;
       }
@@ -696,7 +696,7 @@ public class TestKitCommand extends ChatCommand {
          return builtIn;
       }
 
-      TestVerb verb = TestKit.verb(sub);
+      TestVerb verb = Harness.verb(sub);
       return verb == null ? -1 : verb.coordinateArgIndex();
    }
 
@@ -771,7 +771,7 @@ public class TestKitCommand extends ChatCommand {
     *
     * <p>Keyed on the {@code OEInventory} interface rather than a concrete class, so this covers
     * every vanilla chest, barrel and crate as well as anything a mod adds -- which is what makes
-    * the kit useful against a mod whose source you do not have.
+    * the harness useful against a mod whose source you do not have.
     */
    private Inventory inventoryAt(Level level, int x, int y) {
       ObjectEntity entity = level.entityManager.getObjectEntity(x, y);

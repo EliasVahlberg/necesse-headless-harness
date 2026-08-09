@@ -1,13 +1,13 @@
-package necessetestkit;
+package necesseheadlessharness;
 
 import necesse.engine.commands.CommandsManager;
 import necesse.engine.modLoader.annotations.ModEntry;
-import necessetestkit.command.TestKitCommand;
+import necesseheadlessharness.command.HarnessCommand;
 
 /**
  * A headless integration test harness for Necesse mods.
  *
- * <p>The kit exists because the interesting bugs in a mod are not in its pure logic -- those a unit
+ * <p>The harness exists because the interesting bugs in a mod are not in its pure logic -- those a unit
  * test catches -- but in how it behaves inside a running game: objects placed on a real level,
  * containers opened by a real player, state surviving a real save and reload. Checking that by
  * hand does not scale and does not get repeated.
@@ -16,7 +16,7 @@ import necessetestkit.command.TestKitCommand;
  * {@code Level.serverTick} patch that makes any of this safe binds to an exact method signature
  * and will break on a game update -- once, here, rather than in every mod that copied it. Nothing
  * test-related ends up in your shipped jar. And because the verbs address everything by string ID,
- * the kit can drive a mod whose source you do not have.
+ * the harness can drive a mod whose source you do not have.
  *
  * <p>Registration is deliberately thin: this mod adds one chat command and one bytecode patch, and
  * registers no items, objects, tiles or packets, so it cannot desync a client from a server.
@@ -24,9 +24,9 @@ import necessetestkit.command.TestKitCommand;
  * dedicated server's console.
  */
 @ModEntry
-public class NecesseTestKit {
+public class NecesseHeadlessHarness {
 
-   public static final String MOD_ID = "elias.necessetestkit";
+   public static final String MOD_ID = "elias.necesseheadlessharness";
 
    public void init() {
    }
@@ -38,6 +38,6 @@ public class NecesseTestKit {
     * the game's registries, and the game's registries are closed by this point anyway.
     */
    public void postInit() {
-      CommandsManager.registerServerCommand(new TestKitCommand());
+      CommandsManager.registerServerCommand(new HarnessCommand());
    }
 }

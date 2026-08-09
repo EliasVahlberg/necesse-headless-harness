@@ -1,4 +1,4 @@
-package necessetestkit;
+package necesseheadlessharness;
 
 import java.util.Collections;
 

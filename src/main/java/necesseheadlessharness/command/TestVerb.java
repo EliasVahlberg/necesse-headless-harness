@@ -1,9 +1,9 @@
-package necessetestkit.command;
+package necesseheadlessharness.command;
 
 /**
- * A verb a mod adds to the kit's command.
+ * A verb a mod adds to the harness's command.
  *
- * <p>The kit ships verbs that address anything by string ID, which covers a surprising amount:
+ * <p>The harness ships verbs that address anything by string ID, which covers a surprising amount:
  * placing and breaking objects, filling inventories, giving items, clicking slots, and asserting
  * item counts. What it cannot know is a mod's own concepts -- so a mod registers those itself.
  *
@@ -24,7 +24,7 @@ public interface TestVerb {
     * The argument index at which this verb's {@code (dx, dy)} pair begins, counting the verb
     * itself as index 0. Return -1 if the verb addresses no tile.
     *
-    * <p>This exists because the kit loads the regions a verb addresses before running it, and
+    * <p>This exists because the harness loads the regions a verb addresses before running it, and
     * getting it wrong is not harmless. An earlier version scanned every argument for integers and
     * treated each consecutive pair as a coordinate, so {@code expect capacity 0 0 2560 2560} read
     * the two slot counts as a coordinate and tried to load a region 2560 tiles away. That region
@@ -36,7 +36,7 @@ public interface TestVerb {
    }
 
    /**
-    * Whether the verb needs a player. If true and nobody is connected, the kit reports that
+    * Whether the verb needs a player. If true and nobody is connected, the harness reports that
     * rather than letting the verb dereference a null client.
     */
    default boolean needsPlayer() {
