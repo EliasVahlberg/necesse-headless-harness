@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "necesse-harness"
+version = "0.1.0"
+description = "Drive a real Necesse dedicated server from pytest: headless integration testing for Necesse mods"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Elias Vahlberg" }]
+keywords = ["necesse", "modding", "testing", "pytest", "integration-testing", "headless"]
+classifiers = [
+    "Framework :: Pytest",
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Games/Entertainment",
+    "Topic :: Software Development :: Testing",
+]
+# No runtime dependencies on purpose. It drives a subprocess and reads JSON lines; both are stdlib.
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.urls]
+Homepage = "https://github.com/EliasVahlberg/necesse-headless-harness"
+Source = "https://github.com/EliasVahlberg/necesse-headless-harness"
+
+# The reason to package this at all rather than lean on PYTHONPATH: pytest discovers plugins through
+# installed entry points, so 'pip install -e python/' is what makes the fixtures available to a
+# consumer's tests with no import dance in conftest.py.
+[project.entry-points.pytest11]
+necesse_harness = "necesse_harness.plugin"
+
+[tool.setuptools]
+packages = ["necesse_harness"]

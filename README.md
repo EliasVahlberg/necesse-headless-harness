@@ -157,6 +157,49 @@ Verified both ways, by booting a dedicated server with the harness removed from 
 shipping the classes is fatal, excluding them loads cleanly and logs one line saying the verbs were
 not registered.
 
+## Driving it from Python, with pytest
+
+The scenario format is a one-way pipe: a line goes in, and output has to be recognised in a game
+log. That is enough for regression scenarios and not enough for a test framework, which needs to
+know *which* reply belongs to *which* command, and needs values rather than verdicts. So the harness
+also speaks a correlated request/reply protocol:
+
+```
+harness rpc 7 query capacity 4 0
+```
+
+writes one JSON line to the file named by `-Dnecesseheadlessharness.rpc`:
+
+```json
+{"id":"7","ok":true,"verb":"query","lines":[],"checks":[],"data":{"used":1,"total":80}}
+```
+
+`rpc` is a decorator around the normal command path, so every verb -- built-in or registered by a
+consumer -- works through it without knowing. `hello` reports the protocol version and the whole
+vocabulary. `query` returns the value that `expect` would have compared, computed by the same code,
+so the two cannot drift.
+
+```bash
+make venv     # .venv with the client installed editable
+make pytest
+```
+
+```python
+def test_a_chest_holds_what_you_put_in_it(harness):
+    harness.place("storagebox", 2, 0)
+    harness.fill(2, 0, "ironbar", 40)
+    assert harness.item_at(2, 0, "ironbar") == 40
+```
+
+The `harness` fixture gives each test a cleared area and a fresh player; `harness_server` boots one
+JVM for the session, because that is the only expensive part. A consumer overrides `harness_config`
+to point at its own jar and adds its own fixtures -- the same split as in Java, where the consumer
+registers its own verbs.
+
+Scenario files are not going away. They are the artifact you can paste into a live server to watch a
+failure happen, and `Harness.as_scenario()` prints the lines a Python test sent for exactly that
+reason.
+
 ## There is no CI, and there cannot be
 
 Building needs `Necesse.jar` from a licensed install; running needs `Server.jar` and a real world.

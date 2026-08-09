@@ -13,13 +13,30 @@ import necesseheadlessharness.command.TestVerb;
  * after {@code init()} and throw afterwards, whereas a test verb has no wire format, no ID space
  * and nothing to synchronise, so there is no reason to make it that strict.
  *
- * <p><strong>The soft-dependency trap.</strong> If your mod declares the harness under
- * {@code optionalDependencies}, do not call this from a class that also holds your mod's normal
- * code. With the harness absent, merely loading a class that references these types throws
- * {@code NoClassDefFoundError}. Put your registration in a class of its own and call it from a
- * try/catch, so a player without the harness installed loses the tests and nothing else.
+ * <p><strong>The soft-dependency trap, and the advice that does not work.</strong> An earlier
+ * version of this javadoc said to isolate your registration in one class and call it from a
+ * try/catch. That is wrong. {@code LoadedMod.loadClasses} defines every class in a mod jar as the
+ * mod loads and turns a {@code LinkageError} into a fatal {@code ModLoadException}, so one class
+ * referencing these types stops your mod loading at all for anyone without the harness -- before
+ * any of your code runs, leaving no call site to guard.
+ *
+ * <p>Keep your harness-facing classes out of your released jar instead; test code should not ship
+ * anyway. Exclude the package from your normal jar and build a second one for testing. A
+ * try/catch around your registration call is still worth having, because with the classes excluded
+ * that is the path actually taken. Verified by booting a dedicated server with the harness removed
+ * from the mods folder.
  */
 public final class Harness {
+
+   /**
+    * The request/reply protocol's version, reported by {@code hello}.
+    *
+    * <p>Bump it when a reply's shape changes in a way a driver would notice. The Python client
+    * refuses a version it does not know, because the alternative is a client misreading replies
+    * from a jar it does not match -- and a stale installed jar is a mistake this project has
+    * already made once.
+    */
+   public static final int PROTOCOL_VERSION = 1;
 
    private static final Map<String, TestVerb> VERBS = new LinkedHashMap<>();
 

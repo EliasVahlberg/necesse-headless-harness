@@ -1,4 +1,5 @@
 # Thin wrapper so the Necesse mod build behaves like cargo/cmake:
+PY = $(CURDIR)/.venv/bin/python
 # one short command, output streams live, exit status is real, never hangs.
 #
 # Three rules encoded here, each fixing a specific failure we hit:
@@ -89,3 +90,12 @@ doctor: ## Verify the toolchain assumptions on this machine
 	@test -f "$$(grep -oP '(?<=^org.gradle.java.home=).*' gradle.properties)/lib/libawt_xawt.so" \
 		&& echo "AWT         : headful" \
 		|| echo "AWT         : HEADLESS JVM (runServer cannot work; error dialogs throw instead of showing)"
+
+pytest: ## Run the Python suite (needs .venv: make venv)
+	@$(PY) -m pytest tests/python -q
+
+venv: ## Create .venv and install the Python client in editable mode
+	@# --system-site-packages so the system pytest is visible without downloading one.
+	python3 -m venv --system-site-packages .venv
+	.venv/bin/pip install -e python/ --quiet --no-build-isolation
+	@echo "installed; run 'make pytest'"

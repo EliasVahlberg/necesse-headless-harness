@@ -12,6 +12,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+import java.util.Arrays;
+
 import necesse.engine.commands.AutoComplete;
 import necesse.engine.commands.ChatCommand;
 import necesseheadlessharness.HeadlessPlayer;
@@ -19,6 +21,9 @@ import necesseheadlessharness.Harness;
 import necesseheadlessharness.ServerThreadTasks;
 import necesse.engine.commands.CommandLog;
 import necesse.engine.commands.ParsedCommand;
+import necesse.engine.localization.message.GameMessage;
+import necesseheadlessharness.Json;
+import necesseheadlessharness.RpcSink;
 import necesse.engine.commands.PermissionLevel;
 import necesse.engine.network.Packet;
 import necesse.engine.network.PacketReader;
@@ -72,13 +77,11 @@ public class HarnessCommand extends ChatCommand {
 
    @Override
    public String getUsage() {
-      // Left over from the extraction, this advertised reset, report, withdraw, deposit and
-      // depositall -- which belong to Arcane Storage and are registered at runtime, not built in --
-      // while omitting 'player', which is built in. Hand-maintaining this string is the actual bug;
-      // it should be derived from the verb registry once built-ins are registered like extensions
-      // are. Until then it at least has to be true.
-      StringBuilder usage = new StringBuilder("<place|fill|clear|break|give|open|close|click"
-         + "|quickstack|restock|expect|player|run|echo");
+      // Derived, never hand-written. This string previously advertised five verbs belonging to the
+      // mod it was extracted from and omitted one it actually had, because it was prose maintained
+      // by hand. BUILT_IN_VERBS is now the single list; a consumer's verbs come from the registry.
+      StringBuilder usage = new StringBuilder("<");
+      usage.append(String.join("|", BUILT_IN_VERBS));
       for (String registered : Harness.verbNames()) {
          usage.append('|').append(registered);
       }
@@ -106,6 +109,21 @@ public class HarnessCommand extends ChatCommand {
       if (args.isEmpty()) {
          logs.add("FAIL usage: " + this.getUsage());
          return false;
+      }
+
+      // The driver's channel, handled before anything touches the world.
+      //
+      // 'rpc' is a decorator rather than a parallel implementation: it strips the id, calls this
+      // same method with the remaining arguments, and reports what happened. So marshalling onto
+      // the server thread, region loading, dispatch and the verb registry are all reused, and no
+      // verb knows whether it was called by a scenario or by a driver.
+      String requested = args.get(0).toLowerCase();
+      if (requested.equals("rpc")) {
+         return this.rpc(client, server, serverClient, args, logs);
+      }
+
+      if (requested.equals("hello")) {
+         return this.hello(logs);
       }
 
       Level level = server.world.getLevel(server.world.worldEntity.spawnLevelIdentifier);
@@ -174,6 +192,8 @@ public class HarnessCommand extends ChatCommand {
                return this.breakObject(level, spawn, args, logs);
             case "expect":
                return this.expect(level, spawn, server, serverClient, args, logs);
+            case "query":
+               return this.query(level, spawn, server, serverClient, args, logs);
             case "give":
                return this.give(level, serverClient, args, logs);
             case "clear":
@@ -317,16 +337,7 @@ public class HarnessCommand extends ChatCommand {
       if ("total".equals(kind)) {
          String itemID = args.get(2);
          int wanted = Integer.parseInt(args.get(3));
-         int actual = 0;
-
-         // Every inventory on the level, not a chosen set: 'total' exists to catch an action that
-         // creates or destroys items, and a scan narrower than the whole level would miss items
-         // that moved somewhere unexpected -- which is the interesting failure.
-         for (ObjectEntity entity : level.entityManager.objectEntities) {
-            if (entity instanceof OEInventory && !entity.removed()) {
-               actual += this.countIn(((OEInventory)entity).getInventory(), itemID);
-            }
-         }
+         int actual = this.totalOf(level, itemID);
 
          return this.check(logs, actual == wanted, "total " + itemID + " = " + wanted,
             "expected " + wanted + ", found " + actual);
@@ -368,6 +379,25 @@ public class HarnessCommand extends ChatCommand {
 
       logs.add("FAIL expect takes " + known + ", got '" + kind + "'");
       return false;
+   }
+
+   /**
+    * Every inventory on the level, not a chosen set: this exists to catch an action that creates or
+    * destroys items, and a scan narrower than the whole level would miss items that moved somewhere
+    * unexpected -- which is the interesting failure.
+    *
+    * <p>Shared by {@code expect total} and {@code query total} on purpose. A driver computing this
+    * for itself would be a second definition of the same idea, and the two would drift.
+    */
+   private int totalOf(Level level, String itemID) {
+      int total = 0;
+      for (ObjectEntity entity : level.entityManager.objectEntities) {
+         if (entity instanceof OEInventory && !entity.removed()) {
+            total += this.countIn(((OEInventory)entity).getInventory(), itemID);
+         }
+      }
+
+      return total;
    }
 
    private int countIn(Inventory inventory, String itemID) {
@@ -676,6 +706,266 @@ public class HarnessCommand extends ChatCommand {
    }
 
    /**
+    * The harness's own verbs, in one place.
+    *
+    * <p>They are still a {@code switch} rather than registered {@link TestVerb}s, which is a real
+    * shortcoming: a consumer's verb can declare its coordinate argument and its preconditions,
+    * while a built-in cannot, and nothing can enumerate the built-ins except this list. Listing
+    * them is the cheap part of fixing that, and it is what {@code hello} and the usage string are
+    * derived from.
+    */
+   private static final List<String> BUILT_IN_VERBS = Arrays.asList(
+      "place", "fill", "clear", "break", "give", "open", "close", "click", "quickstack", "restock",
+      "expect", "query", "player", "run", "echo", "hello", "rpc");
+
+   /** Kinds {@code expect} and {@code query} both understand without a consumer mod. */
+   private static final List<String> BUILT_IN_KINDS = Arrays.asList("item", "total", "held");
+
+   /**
+    * Structured fields for the reply currently being assembled, or null when a verb was invoked by
+    * a scenario or by hand rather than through {@code rpc}.
+    *
+    * <p>Static, and safe for a reason worth stating rather than assuming: console commands arrive
+    * one at a time on a single scanner thread, and {@code rpc} calls the inner verb synchronously
+    * before returning. There is never a second reply being built. If the harness ever grows a
+    * second command source, this becomes wrong and must become a parameter.
+    */
+   private static Json.Writer replyData;
+
+   /**
+    * {@code rpc <id> <verb> ...} -- run a verb and report the outcome as one JSON line.
+    *
+    * <p>The id is the entire point. Before this, the harness was a one-way pipe: a driver wrote a
+    * command to stdin and pattern-matched a game log for something that looked like a reply, with
+    * no way to tell which reply belonged to which command, no values, and no way to distinguish a
+    * failed assertion from a crash. An echoed id makes the channel a request/response one, which is
+    * the difference between a scenario runner and something a test framework can drive.
+    */
+   private boolean rpc(Client client, Server server, ServerClient serverClient,
+                       ArrayList<String> args, CommandLog logs) {
+      if (args.size() < 3) {
+         logs.add("FAIL usage: rpc <id> <verb> ...");
+         return false;
+      }
+
+      String id = args.get(1);
+      ArrayList<String> inner = new ArrayList<>(args.subList(2, args.size()));
+      RecordingLog recording = new RecordingLog(logs);
+      Json.Writer data = new Json.Writer();
+
+      // Restored rather than cleared, so 'rpc 1 run scenario.txt' -- which re-enters this method
+      // per line -- does not lose the outer reply's fields.
+      Json.Writer enclosing = replyData;
+      replyData = data;
+
+      boolean ok;
+      String error = null;
+      try {
+         ok = this.run(client, server, serverClient, inner, recording);
+      } catch (Throwable t) {
+         // A driver must be able to tell a failed assertion from a crash. Without this the JVM
+         // stays alive, no reply is ever written, and the driver times out with no explanation.
+         ok = false;
+         error = t.getClass().getSimpleName() + (t.getMessage() == null ? "" : ": " + t.getMessage());
+         recording.add("FAIL " + error);
+      } finally {
+         replyData = enclosing;
+      }
+
+      Json.Writer reply = new Json.Writer()
+         .str("id", id)
+         .bool("ok", ok && !recording.sawFailure())
+         .str("verb", inner.get(0).toLowerCase())
+         .strings("lines", recording.lines())
+         .raw("checks", recording.checksJson());
+
+      String fields = data.end();
+      if (!fields.equals("{}")) {
+         reply.raw("data", fields);
+      }
+
+      if (error != null) {
+         reply.str("error", error);
+      }
+
+      RpcSink.emit(reply.end());
+      return ok;
+   }
+
+   /**
+    * {@code hello} -- the protocol version and the vocabulary actually present.
+    *
+    * <p>Two problems at once. A driver pinned to one protocol version needs to fail with a sentence
+    * rather than behave oddly against a jar it does not match -- the jar and the Python client live
+    * in one repo precisely so they share a version, but a stale installed jar is exactly the mistake
+    * this project has already made once. And until now nothing could enumerate the real vocabulary,
+    * so no linter or generated documentation was possible.
+    */
+   private boolean hello(CommandLog logs) {
+      Json.Writer data = replyData != null ? replyData : new Json.Writer();
+      data.num("protocol", Harness.PROTOCOL_VERSION)
+         .strings("builtins", BUILT_IN_VERBS)
+         .strings("verbs", Harness.verbNames())
+         .strings("kinds", BUILT_IN_KINDS)
+         .strings("expectations", Harness.expectationKinds())
+         .strings("queries", this.queryableKinds());
+
+      logs.add("harness protocol " + Harness.PROTOCOL_VERSION);
+      if (replyData == null) {
+         // Typed by hand rather than driven: still show the values, since a reply nobody can see is
+         // worse than no reply.
+         logs.add("DATA " + data.end());
+      }
+
+      return true;
+   }
+
+   /** Which kinds {@code query} can answer: the built-ins, plus any registered expectation that opts in. */
+   private List<String> queryableKinds() {
+      List<String> kinds = new ArrayList<>(BUILT_IN_KINDS);
+      for (String kind : Harness.expectationKinds()) {
+         TestVerb expectation = Harness.expectation(kind);
+         if (expectation instanceof TestQuery && !kinds.contains(kind)) {
+            kinds.add(kind);
+         }
+      }
+
+      return kinds;
+   }
+
+   /**
+    * {@code query <kind> [args...]} -- the value, not a verdict.
+    *
+    * <p>Deliberately shares argument positions with {@code expect} minus the expected values, so
+    * {@code query item 4 0 ironbar} and {@code expect item 4 0 ironbar 40} address the same tile
+    * with the same indices, and one COORDINATE_ARG entry covers both.
+    *
+    * <p>Values come from the same helpers {@code expect} uses. That is the point rather than tidiness:
+    * a driver that counted items for itself would be a second definition of every assertion.
+    */
+   private boolean query(Level level, Point spawn, Server server, ServerClient serverClient,
+                         ArrayList<String> args, CommandLog logs) {
+      String kind = args.get(1).toLowerCase();
+      Json.Writer data = replyData != null ? replyData : new Json.Writer();
+
+      // A registered expectation wins over a built-in of the same name, exactly as with 'expect'.
+      TestVerb registered = Harness.expectation(kind);
+      if (registered instanceof TestQuery) {
+         if (registered.needsPlayer() && this.requirePlayer(serverClient, logs, "query " + kind) == null) {
+            return false;
+         }
+
+         ((TestQuery)registered).query(new TestContext(level, spawn, server, serverClient, args, logs), data);
+      } else if ("total".equals(kind)) {
+         data.str("item", args.get(2)).num("count", this.totalOf(level, args.get(2)));
+      } else if ("held".equals(kind)) {
+         if (this.requirePlayer(serverClient, logs, "query held") == null) {
+            return false;
+         }
+
+         data.str("item", args.get(2)).num("count", this.countHeld(serverClient, args.get(2)));
+      } else if ("item".equals(kind)) {
+         int x = spawn.x + Integer.parseInt(args.get(2));
+         int y = spawn.y + Integer.parseInt(args.get(3));
+         Inventory inventory = this.inventoryAt(level, x, y);
+         if (inventory == null) {
+            logs.add("FAIL nothing with an inventory at " + args.get(2) + "," + args.get(3));
+            return false;
+         }
+
+         data.str("item", args.get(4)).num("count", this.countIn(inventory, args.get(4)));
+      } else {
+         logs.add("FAIL query takes " + String.join(", ", this.queryableKinds()) + ", got '" + kind + "'");
+         return false;
+      }
+
+      if (replyData == null) {
+         logs.add("DATA " + data.end());
+      }
+
+      return true;
+   }
+
+   /**
+    * Captures every line a verb logs, and passes it through to the real log unchanged.
+    *
+    * <p>Wrapping the log rather than changing the verbs is what makes {@code rpc} cost nothing per
+    * verb: {@code CommandLog.add(String)} is public and non-final, so all fourteen built-ins and
+    * every registered verb are recorded without knowing it. The lines are still printed, so a
+    * driven run and a scenario run produce the same human-readable log.
+    */
+   private static final class RecordingLog extends CommandLog {
+
+      private final CommandLog out;
+
+      private final List<String> captured = new ArrayList<>();
+
+      private RecordingLog(CommandLog out) {
+         // Null client and server client: this instance never prints for itself, it only forwards.
+         super(null, null);
+         this.out = out;
+      }
+
+      @Override
+      public void add(String message) {
+         this.captured.add(message);
+         this.out.add(message);
+      }
+
+      @Override
+      public void add(GameMessage message) {
+         this.captured.add(message.translate());
+         this.out.add(message);
+      }
+
+      private List<String> lines() {
+         return this.captured;
+      }
+
+      private boolean sawFailure() {
+         for (String line : this.captured) {
+            if (line.startsWith("FAIL")) {
+               return true;
+            }
+         }
+
+         return false;
+      }
+
+      /**
+       * The PASS/FAIL lines as structured checks.
+       *
+       * <p>Parsing the harness's own output looks like the pattern-matching this layer exists to
+       * remove, but it is a different thing: the format is authored here, in the same process, with
+       * no log timestamps, no colour codes and no other mod's output interleaved. The alternative --
+       * changing every verb to report checks structurally -- buys nothing a driver can use.
+       */
+      private String checksJson() {
+         StringBuilder array = new StringBuilder("[");
+         boolean first = true;
+         for (String line : this.captured) {
+            boolean pass = line.startsWith("PASS ");
+            boolean fail = line.startsWith("FAIL ");
+            if (!pass && !fail) {
+               continue;
+            }
+
+            if (!first) {
+               array.append(',');
+            }
+
+            array.append(new Json.Writer()
+               .bool("ok", pass)
+               .str("text", line.substring(5))
+               .end());
+            first = false;
+         }
+
+         return array.append(']').toString();
+      }
+   }
+
+   /**
     * Where each subcommand's tile coordinates actually are, as an argument index for {@code dx}.
     *
     * <p>This used to scan every argument for integers and treat each consecutive pair as a
@@ -692,6 +982,8 @@ public class HarnessCommand extends ChatCommand {
    static {
       COORDINATE_ARG.put("place", 2);
       COORDINATE_ARG.put("expect", 2);
+      // query shares expect's argument positions, minus the expected values at the end.
+      COORDINATE_ARG.put("query", 2);
       COORDINATE_ARG.put("fill", 1);
       COORDINATE_ARG.put("break", 1);
    }

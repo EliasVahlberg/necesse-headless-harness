@@ -80,3 +80,6 @@ latest-log.txt
 .project
 .classpath
 .settings/
+
+# Local virtualenv for the Python client. Not part of the mod.
+.venv/
