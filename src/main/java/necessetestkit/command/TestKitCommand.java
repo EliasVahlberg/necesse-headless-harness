@@ -40,6 +40,7 @@ import necesse.inventory.container.Container;
 import necesse.inventory.container.ContainerAction;
 import necesse.inventory.container.ContainerActionResult;
 import necesse.inventory.container.slots.ContainerSlot;
+import necesse.level.gameObject.GameObject;
 import necesse.level.maps.Level;
 import necesse.level.maps.regionSystem.RegionManager;
 
@@ -167,6 +168,8 @@ public class TestKitCommand extends ChatCommand {
                return this.give(level, serverClient, args, logs);
             case "clear":
                return this.clear(level, spawn, args, logs);
+            case "open":
+               return this.open(level, spawn, serverClient, args, logs);
             case "close":
                return this.close(serverClient, logs);
             case "quickstack":
@@ -410,6 +413,46 @@ public class TestKitCommand extends ChatCommand {
     * restock are engine-level slot conventions ({@code QUICK_STACK_SLOT}, {@code RESTOCK_SLOT}),
     * so these verbs work against a vanilla chest as readily as against a modded container.
     */
+   /**
+    * {@code open <dx> <dy>} -- interacts with whatever is at a tile, as a player would.
+    *
+    * <p>Generic because the engine already is: {@code GameObject.interact} is how every openable
+    * thing opens, and each object decides for itself what container that means. A vanilla chest
+    * opens an {@code OEInventoryContainer}, a workstation opens its crafting container, and a
+    * modded object opens whatever it registered -- none of which this verb needs to know.
+    */
+   private boolean open(Level level, Point spawn, ServerClient serverClient, ArrayList<String> args,
+                        CommandLog logs) {
+      if (this.requirePlayer(serverClient, logs, "open") == null) {
+         return false;
+      }
+
+      int x = spawn.x + Integer.parseInt(args.get(1));
+      int y = spawn.y + Integer.parseInt(args.get(2));
+
+      GameObject object = level.getObject(x, y);
+      if (object == null || object.getID() == 0) {
+         logs.add("FAIL nothing to open at " + args.get(1) + "," + args.get(2));
+         return false;
+      }
+
+      // Compare the container before and after rather than checking for any container at all: a
+      // player always has one open, so 'a container exists' would pass even when interact did
+      // nothing. A change of identity is the evidence that something actually opened.
+      Container before = serverClient.getContainer();
+      object.interact(level, x, y, serverClient.playerMob);
+      Container after = serverClient.getContainer();
+
+      if (after == before) {
+         logs.add("FAIL interacting with " + object.getStringID() + " at " + args.get(1) + ","
+            + args.get(2) + " opened nothing");
+         return false;
+      }
+
+      logs.add("PASS opened " + object.getStringID() + " at " + args.get(1) + "," + args.get(2));
+      return true;
+   }
+
    private Container requireContainer(ServerClient serverClient, CommandLog logs, String sub) {
       if (this.requirePlayer(serverClient, logs, sub) == null) {
          return null;
