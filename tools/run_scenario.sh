@@ -89,6 +89,16 @@ fi
 
 SCENARIO_DIR="${SCENARIO_DIR:-$(cd "$(dirname "$1")" && pwd)}"
 
+# The scenario paths must become absolute here too. This script changes directory below, so a
+# relative path given by the caller would silently point somewhere else afterwards -- and 'read'
+# from a file that is not there produces no lines, which looked exactly like a scenario with
+# nothing in it. That is how a suite of 90 assertions reported 0 passed, 0 failed and exit 0.
+ABSOLUTE_SCENARIOS=()
+for scenario_arg in "$@"; do
+   ABSOLUTE_SCENARIOS+=("$(cd "$(dirname "$scenario_arg")" && pwd)/$(basename "$scenario_arg")")
+done
+set -- "${ABSOLUTE_SCENARIOS[@]}"
+
 cd "$KIT_DIR"
 
 # The game directory is not autodetectable on this machine; gradle.properties holds it.
@@ -318,7 +328,17 @@ for name in "${RAN[@]}"; do
    failures="$(printf '%s\n' "$section" | grep -cE "\bFAIL\b" || true)"
    TOTAL_FAIL=$((TOTAL_FAIL + failures))
 
-   printf '%s\n' "$section" | grep -E "\b(PASS|FAIL)\b" || echo "  (no assertions reported)"
+   printf '%s\n' "$section" | grep -E "\b(PASS|FAIL)\b" || true
+
+   # Silence is not success. A scenario that reports nothing has either not run, or run against a
+   # mod that did not load, or been fed from a path that does not exist -- all of which previously
+   # presented as a clean pass, which is the single most dangerous thing a test runner can do.
+   if [[ "$passes" -eq 0 && "$failures" -eq 0 ]]; then
+      echo "--- $name: NO ASSERTIONS -- the scenario asserted nothing, which is treated as a failure"
+      TOTAL_FAIL=$((TOTAL_FAIL + 1))
+      continue
+   fi
+
    echo "--- $name: $passes passed, $failures failed"
 done
 
