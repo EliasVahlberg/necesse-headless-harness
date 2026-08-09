@@ -70,17 +70,18 @@ def harness_session(harness_server) -> Harness:
 
 @pytest.fixture
 def harness(harness_session) -> Harness:
-    """A cleared area and a *fresh* player. The unit of isolation a test should rely on.
+    """A cleared area and an empty-handed player. The unit of isolation a test should rely on.
 
-    The player is replaced rather than reused, and that is not tidiness. The first suite written
-    against this leaked: one test withdrew ten iron bars into the player's inventory and the next
-    test's conservation check found fifty items where forty were expected. Clearing the world is not
-    enough, because a player carries state that no amount of clearing touches.
+    Both halves were learned from a leak rather than designed. One test withdrew ten iron bars into
+    the player's inventory and the next test's conservation check found fifty items where forty were
+    expected, so clearing the world was not enough. The first fix -- despawn and respawn -- looked
+    right and did nothing: the headless player keeps a stable authentication ID so that the server
+    reuses its player file, and that is exactly what restores its inventory. A later suite caught it,
+    with a crafted boat bleeding into two more tests.
 
-    Respawning costs two commands, roughly a tenth of a second, which is the cheapest correct answer
-    available until the harness can load a fresh level per test.
+    So the player's inventory is emptied explicitly, in one command, clearing everything ``query
+    held`` counts.
     """
     harness_session.clear(CLEAR_RADIUS)
-    harness_session.despawn_player()
-    harness_session.spawn_player()
+    harness_session.clear_player()
     return harness_session

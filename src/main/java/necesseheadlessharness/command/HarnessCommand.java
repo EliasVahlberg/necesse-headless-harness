@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.stream.Collectors;
 import java.util.Locale;
 import java.util.Map;
 
@@ -42,6 +43,7 @@ import necesse.inventory.InventorySlot;
 import necesse.inventory.InventoryItem;
 import necesse.inventory.item.Item;
 import necesse.inventory.item.ItemCategory;
+import necesse.inventory.recipe.Recipe;
 import necesse.inventory.container.Container;
 import necesse.inventory.container.ContainerAction;
 import necesse.inventory.container.ContainerActionResult;
@@ -209,6 +211,8 @@ public class HarnessCommand extends ChatCommand {
                return this.restock(serverClient, logs);
             case "click":
                return this.click(serverClient, args, logs);
+            case "craft":
+               return this.craft(serverClient, args, logs);
             case "run":
                return this.runScenario(server, serverClient, args, logs);
             case "player":
@@ -443,7 +447,33 @@ public class HarnessCommand extends ChatCommand {
          HeadlessPlayer.despawn(server, logs);
          return true;
       }
-      logs.add("FAIL usage: player <spawn|despawn>");
+      if (action.equals("clear")) {
+         ServerClient client = HeadlessPlayer.current();
+         if (client == null) {
+            logs.add("FAIL no player to clear");
+            return false;
+         }
+
+         // Clears exactly what 'query held' counts -- drag, main, equipment, cloud, trash and any
+         // temporary inventory -- so the two cannot disagree about what the player is holding.
+         //
+         // This exists because respawning is not a reset. The headless player keeps a stable
+         // authentication ID so the server reuses its player file, which is what makes it survive a
+         // level change; the same mechanism restores its inventory on despawn/spawn. A suite found
+         // that out the hard way, with a crafted item bleeding into the next two tests.
+         int cleared = 0;
+         for (InventorySlot slot : client.playerMob.getInv()
+               .streamInventorySlots(true, true, true, true).collect(Collectors.toList())) {
+            if (slot.getItem() != null) {
+               slot.clearSlot();
+               cleared++;
+            }
+         }
+
+         logs.add("player cleared " + cleared + " slot(s)");
+         return true;
+      }
+      logs.add("FAIL usage: player <spawn|despawn|clear>");
       return false;
    }
 
@@ -551,6 +581,56 @@ public class HarnessCommand extends ChatCommand {
    }
 
    /** {@code click <slotIndex> <LEFT_CLICK|QUICK_MOVE|...>} — a raw container action. */
+   /**
+    * {@code craft <resultItemStringID> [amount]} -- crafts through the open container.
+    *
+    * <p>Generic rather than storage-specific because crafting is a {@code Container} capability and
+    * not a crafting station's: {@code applyCraftingAction} is defined on {@code Container}, consumes
+    * from {@code getCraftInventories()}, and every container registers the recipes that need no
+    * station. So this drives a chest, a workstation or a storage terminal identically, and what
+    * differs between them is only which inventories they contribute.
+    *
+    * <p>Recipes are addressed by the string ID of what they produce, because that is what a test
+    * knows. The numeric id is an index into the container's own list, which is meaningless outside
+    * one open container and would make a scenario unreadable.
+    */
+   private boolean craft(ServerClient serverClient, ArrayList<String> args, CommandLog logs) {
+      Container container = this.requireContainer(serverClient, logs, "craft");
+      if (container == null) {
+         return false;
+      }
+
+      String wanted = args.get(1);
+      int amount = args.size() > 2 ? Integer.parseInt(args.get(2)) : 1;
+
+      // Walked by index rather than through streamRecipes(Tech...), which would mean enumerating
+      // every tech to ask "any of them". getRecipe returns null past the end, and the index is
+      // exactly what applyCraftingAction wants.
+      int recipeID = -1;
+      Recipe recipe = null;
+      for (int id = 0; (recipe = container.getRecipe(id)) != null; id++) {
+         if (recipe.resultItem.item.getStringID().equals(wanted)) {
+            recipeID = id;
+            break;
+         }
+      }
+
+      if (recipeID < 0) {
+         logs.add("FAIL this container offers no recipe producing '" + wanted + "'");
+         return false;
+      }
+
+      int crafted = container.applyCraftingAction(recipeID, recipe.getRecipeHash(), amount, true);
+      if (crafted <= 0) {
+         logs.add("FAIL could not craft " + wanted + "; ingredients missing from every inventory the "
+               + "container crafts from");
+         return false;
+      }
+
+      logs.add("craft " + wanted + " x" + crafted);
+      return true;
+   }
+
    private boolean click(ServerClient serverClient, ArrayList<String> args, CommandLog logs) {
       Container container = this.requireContainer(serverClient, logs, "click");
       if (container == null) {
@@ -716,8 +796,8 @@ public class HarnessCommand extends ChatCommand {
     * derived from.
     */
    private static final List<String> BUILT_IN_VERBS = Arrays.asList(
-      "place", "fill", "clear", "break", "give", "open", "close", "click", "quickstack", "restock",
-      "expect", "query", "player", "run", "echo", "hello", "rpc");
+      "place", "fill", "clear", "break", "give", "open", "close", "click", "craft", "quickstack",
+      "restock", "expect", "query", "player", "run", "echo", "hello", "rpc");
 
    /** Kinds {@code expect} and {@code query} both understand without a consumer mod. */
    // 'category' and 'categories' answer about the item registry rather than about the level, so they

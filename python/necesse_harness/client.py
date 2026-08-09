@@ -98,6 +98,10 @@ class Harness:
     def despawn_player(self) -> Reply:
         return self.do("player", "despawn")
 
+    def clear_player(self) -> Reply:
+        """Empties the player's hands. Not the same as respawning, which restores the saved file."""
+        return self.do("player", "clear")
+
     def give(self, item: str, count: int) -> Reply:
         return self.do("give", item, str(count))
 
