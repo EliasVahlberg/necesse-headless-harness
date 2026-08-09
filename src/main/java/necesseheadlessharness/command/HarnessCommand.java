@@ -72,13 +72,23 @@ public class HarnessCommand extends ChatCommand {
 
    @Override
    public String getUsage() {
-      return "<place|fill|clear|reset|break|report|expect|give|open|close|withdraw|deposit"
-         + "|depositall|quickstack|restock|click|run|echo> ...";
+      // Left over from the extraction, this advertised reset, report, withdraw, deposit and
+      // depositall -- which belong to Arcane Storage and are registered at runtime, not built in --
+      // while omitting 'player', which is built in. Hand-maintaining this string is the actual bug;
+      // it should be derived from the verb registry once built-ins are registered like extensions
+      // are. Until then it at least has to be true.
+      StringBuilder usage = new StringBuilder("<place|fill|clear|break|give|open|close|click"
+         + "|quickstack|restock|expect|player|run|echo");
+      for (String registered : Harness.verbNames()) {
+         usage.append('|').append(registered);
+      }
+
+      return usage.append("> ...").toString();
    }
 
    @Override
    public String getAction() {
-      return "Arcane Storage test harness";
+      return "Necesse headless test harness";
    }
 
    @Override
