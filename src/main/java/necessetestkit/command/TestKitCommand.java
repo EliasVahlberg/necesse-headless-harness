@@ -436,6 +436,15 @@ public class TestKitCommand extends ChatCommand {
          return false;
       }
 
+      // Ask the object first. This distinguishes "you addressed something that does not open" from
+      // "it should have opened and did not", which are different bugs -- the first is the
+      // scenario's fault and the second is the mod's.
+      if (!object.canInteract(level, x, y, serverClient.playerMob)) {
+         logs.add("FAIL " + object.getStringID() + " at " + args.get(1) + "," + args.get(2)
+            + " reports it cannot be interacted with");
+         return false;
+      }
+
       // Compare the container before and after rather than checking for any container at all: a
       // player always has one open, so 'a container exists' would pass even when interact did
       // nothing. A change of identity is the evidence that something actually opened.
