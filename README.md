@@ -1,5 +1,7 @@
 # Necesse Headless Harness
 
+![Necesse Headless Harness](art/banner/banner.png)
+
 A headless integration test harness for Necesse mods. It drives a real dedicated server from
 plain-text scenario files — placing objects, filling containers, opening UIs, clicking slots,
 asserting what happened — with **no rendering and nobody playing the game**.

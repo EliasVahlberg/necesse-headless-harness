@@ -1,0 +1,17 @@
+{
+  "image": "/home/elias/Documents/my_repos/necesse-modding/art-submissions/necesse-headless-harness/banner_candidates/pixel_art_sprite_00120_.png",
+  "reference": null,
+  "notes": "same bezel fix, alternate seed",
+  "config": {
+    "prompt": "pixel art scene, a cozy fantasy crafting workshop interior, a wooden workbench cluttered with tools crates and potion bottles, sitting on the workbench an anachronistic bulky beige CRT computer monitor with a thick deep boxy back, a plain blank unmarked bezel with no logo and no buttons, and a chunky plastic keyboard, both glowing softly, the CRT screen shows a code editor with colorful syntax highlighted lines of code in blue green and orange blocks, the lines are abstract colored blocks and dashes suggesting code without being legible text, a small potted plant and a coffee mug next to the keyboard, warm wooden workshop with hanging lanterns and shelves of jars, colorful bright fantasy RPG art style, torch and lantern light mixing with the monitor's cool glow, 16-bit pixel art, chunky low-res pixel art, large flat color blocks, hard-edged shading, game asset, fantasy RPG mod banner, no text, no words, no letters, no signage, no writing, no brand logos, no icons",
+    "negative_prompt": "blurry, low quality, photorealistic, 3d render, watermark, text, letters, words, writing, signage, title, logo text, caption, subtitle, handwriting, illegible scribbles, fake text, pseudo text, gibberish text, garbled characters, legible looking text, brand logo, apple logo, company logo, fake logo, logo-shaped mark, icon symbols, button icons, deformed, transparent background, flat empty background, dark gothic, horror, sci-fi spaceship, futuristic, flat panel monitor, slim modern monitor, thin bezel, smooth gradient, soft shading, painterly, illustration, high detail, fine detail",
+    "seed": 55830,
+    "steps": 4,
+    "cfg": 1.0,
+    "sampler_name": "euler",
+    "scheduler": "normal",
+    "width": 512,
+    "height": 256,
+    "lora_strength": 1.0
+  }
+}
