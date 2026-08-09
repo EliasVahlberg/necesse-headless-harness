@@ -131,11 +131,31 @@ counts one tile's inventory, which is right for a chest and wrong for anything t
 across containers — so a mod must be able to redefine the word rather than invent a second one
 meaning the same thing.
 
-**The soft-dependency trap.** Declare the harness under `optionalDependencies`, then keep every
-reference to kit types inside one class that nothing else touches, and call it from a
-`try/catch (Throwable)`. With the harness absent, merely *loading* a class that mentions a missing
-type throws `NoClassDefFoundError`, which is an `Error` and not caught by `catch (Exception)`.
-Get this wrong and players without the harness cannot load your mod at all.
+**Your harness-facing classes must not be in your released jar.** This is the one thing to get
+right, and a `try/catch` will not save you.
+
+`LoadedMod.loadClasses` defines **every** class in a mod jar as the mod loads, and turns a
+`LinkageError` or `ClassNotFoundException` into a fatal `ModLoadException`. So a single class
+referencing a harness type is enough to make your mod refuse to load for anyone who has not
+installed the harness -- and it fails during mod loading, before any of your code runs, so there is
+no call site left to guard. The symptom misleads too: the loader then dies with a
+`NullPointerException` about a null dispose method.
+
+The fix is that test code should not ship anyway. Build two jars:
+
+```groovy
+tasks.named('buildModJar') { exclude "yourmod/harness/**" }   // released
+tasks.register('buildTestModJar', Jar) { ... }                // build/testjar, includes them
+```
+
+and point `MOD_UNDER_TEST` at the test one. `optionalDependencies` in `mod.info` is still worth
+declaring, so load order is right when the harness *is* present, and a `try/catch (Throwable)`
+around your own registration call is still worth having -- with the classes excluded that is the
+path actually taken, and `NoClassDefFoundError` is an `Error` which `catch (Exception)` misses.
+
+Verified both ways, by booting a dedicated server with the harness removed from the mods folder:
+shipping the classes is fatal, excluding them loads cleanly and logs one line saying the verbs were
+not registered.
 
 ## There is no CI, and there cannot be
 
