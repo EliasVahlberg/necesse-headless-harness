@@ -622,8 +622,11 @@ public class HarnessCommand extends ChatCommand {
 
       int crafted = container.applyCraftingAction(recipeID, recipe.getRecipeHash(), amount, true);
       if (crafted <= 0) {
-         logs.add("FAIL could not craft " + wanted + "; ingredients missing from every inventory the "
-               + "container crafts from");
+         // Deliberately does not blame the ingredients. A container may refuse for its own reasons --
+         // a storage terminal refuses recipes whose crafting station is not installed -- and a
+         // message that names one cause sends the reader looking in the wrong place.
+         logs.add("FAIL the container refused to craft " + wanted + "; either the ingredients are "
+               + "missing from every inventory it crafts from, or it does not allow that recipe");
          return false;
       }
 
