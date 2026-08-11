@@ -4,6 +4,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import necesse.engine.GameLaunch;
 import necesse.engine.GlobalData;
 import necesseheadlessharness.command.TestVerb;
 
@@ -59,6 +60,25 @@ public final class Harness {
     */
    public static boolean isHeadlessServer() {
       return GlobalData.isServer();
+   }
+
+   /**
+    * The launch option that turns the harness on inside a client: {@code -harness}.
+    *
+    * <p>Exists because being dormant in a client cost something real. The command is an
+    * {@code OWNER}-level {@link necesse.engine.commands.ChatCommand}, so before the gate it could be
+    * typed in one's own singleplayer world -- {@code /harness fill 1 0 stone 2000} sets up a scene for
+    * visual QA in one line, where doing it by hand in creative takes minutes. Off by default, because
+    * the default has to be safe; available when asked for, because the capability is worth having.
+    */
+   public static final String CLIENT_OPT_IN = "harness";
+
+   /**
+    * Whether the harness should act at all: a dedicated server always, a client only when launched
+    * with {@code -harness}.
+    */
+   public static boolean isActive() {
+      return isHeadlessServer() || GameLaunch.launchOptions.containsKey(CLIENT_OPT_IN);
    }
 
    /**

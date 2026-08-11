@@ -39,7 +39,7 @@ public class NecesseHeadlessHarness {
     * the game's registries, and the game's registries are closed by this point anyway.
     */
    public void postInit() {
-      if (!Harness.isHeadlessServer()) {
+      if (!Harness.isActive()) {
          // Dormant in a client, including its singleplayer server. This mod exists to drive a
          // dedicated server from another process; in a client it has nothing to do and no business
          // being in the way.
@@ -49,7 +49,7 @@ public class NecesseHeadlessHarness {
          // anything once he started hosting a world -- gone when he disabled this mod. The
          // mechanism is still unidentified; being inert removes the question rather than answering
          // it, which is the right trade for a test tool.
-         GameLog.out.println("Headless harness: dormant, this is a client process");
+         GameLog.out.println("Headless harness: dormant in this client; launch with -harness to enable");
          return;
       }
 

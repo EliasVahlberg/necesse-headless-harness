@@ -47,7 +47,7 @@ public final class ServerThreadTasks {
     * nothing on every level every tick" is not a thing a test tool should spend in someone's game.
     */
    public static void drain() {
-      if (!Harness.isHeadlessServer()) {
+      if (!Harness.isActive()) {
          return;
       }
 
