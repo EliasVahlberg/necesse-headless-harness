@@ -507,6 +507,14 @@ public class HarnessCommand extends ChatCommand {
          return false;
       }
 
+      // Stand the player on the target before interacting, because a container is entitled to
+      // refuse a player who is not there. Containers check interact range in isValid, and the
+      // server re-checks it every tick and closes anything that fails -- so a scenario that
+      // interacted from across the map used to work only because the harness's player never
+      // ticked. It does now. Modelling "walk up to it and open it" keeps scenarios honest without
+      // making every one of them say so.
+      serverClient.playerMob.setPos(x * 32 + 16, y * 32 + 16, true);
+
       // Ask the object first. This distinguishes "you addressed something that does not open" from
       // "it should have opened and did not", which are different bugs -- the first is the
       // scenario's fault and the second is the mod's.

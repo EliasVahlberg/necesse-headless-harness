@@ -8,6 +8,7 @@ import necesse.engine.network.networkInfo.InvalidNetworkInfo;
 import necesse.engine.network.packet.PacketClientInstalledDLC;
 import necesse.engine.network.packet.PacketDisconnect;
 import necesse.engine.network.packet.PacketPlayerAppearance;
+import necesse.engine.network.packet.PacketSpawnPlayer;
 import necesse.engine.network.server.Server;
 import necesse.engine.network.server.ServerClient;
 import necesse.level.maps.Level;
@@ -88,6 +89,15 @@ public final class HeadlessPlayer {
       // A real client answers PacketConnectApproved by loading and then asking to be placed.
       // Nothing is going to answer here, so do that part directly.
       spawned.changeLevel(level.getIdentifier());
+
+      // And then it sends PacketSpawnPlayer, which is the only thing that sets hasSpawned -- and
+      // hasSpawned gates the entire body of ServerClient.serverTick: quests, the player mob's own
+      // tick, mob spawning, and *the open container's tick*. Without this, a scenario runs against a
+      // world where no container ever ticks, so anything a container does over time silently does
+      // not happen. That cost a real bug hunt: a storage terminal's "someone is using me" flag
+      // expires after two seconds unless the container re-asserts it every tick, and a test of that
+      // failed against the harness rather than against the mod.
+      spawned.submitSpawnPacket(new PacketSpawnPlayer(spawned));
 
       client = spawned;
       logs.add("headless player '" + spawned.getName() + "' connected"
