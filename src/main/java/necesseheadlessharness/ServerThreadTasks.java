@@ -39,8 +39,18 @@ public final class ServerThreadTasks {
    private ServerThreadTasks() {
    }
 
-   /** Called from the server tick. Runs everything queued since the last one. */
+   /**
+    * Called from the server tick. Runs everything queued since the last one.
+    *
+    * <p>Returns immediately in a client process. The patch that calls this is applied wherever the
+    * jar is loaded, including a client, and while an empty queue costs almost nothing, "almost
+    * nothing on every level every tick" is not a thing a test tool should spend in someone's game.
+    */
    public static void drain() {
+      if (!Harness.isHeadlessServer()) {
+         return;
+      }
+
       drainThread = Thread.currentThread();
 
       Runnable task;

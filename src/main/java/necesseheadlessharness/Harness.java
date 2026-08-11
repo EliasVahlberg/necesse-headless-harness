@@ -4,6 +4,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import necesse.engine.GlobalData;
 import necesseheadlessharness.command.TestVerb;
 
 /**
@@ -46,6 +47,18 @@ public final class Harness {
    private static final Map<String, String> OBJECT_ALIASES = new HashMap<>();
 
    private Harness() {
+   }
+
+   /**
+    * Whether this process is a dedicated server, and so whether the harness should do anything at
+    * all.
+    *
+    * <p>{@code GlobalData.isServer} is set at the top of {@code loadAll}, before {@code loadMods},
+    * so it is already correct by the time any mod method runs. A client's singleplayer server does
+    * not count: that runs inside a client process, where a testing tool has no business acting.
+    */
+   public static boolean isHeadlessServer() {
+      return GlobalData.isServer();
    }
 
    /**

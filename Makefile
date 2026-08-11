@@ -101,6 +101,10 @@ install: build ## Copy the built jar into the game's mods folder
 	@cp build/jar/NecesseHeadlessHarness-*.jar $(MODS_DIR)/
 	@echo "installed to $(MODS_DIR)"
 
+uninstall: ## Remove the harness from the game's mods folder (for clean play sessions)
+	@rm -f $(MODS_DIR)/NecesseHeadlessHarness-*.jar
+	@echo "removed from $(MODS_DIR) -- run 'make install' before testing again"
+
 pytest: ## Run the Python suite (needs .venv: make venv)
 	@$(PY) -m pytest tests/python -q
 
