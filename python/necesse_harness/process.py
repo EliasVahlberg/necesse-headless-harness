@@ -141,7 +141,13 @@ class HarnessServer:
 
     # -- lifecycle ------------------------------------------------------------------------------
 
-    def start(self) -> None:
+    def start(self, fresh: bool = True) -> None:
+        """Boots the server.
+
+        ``fresh=False`` keeps the existing world and the existing reply file, which is what a restart
+        needs: the world is the state under test, and the reply reader holds an open position in the
+        file, so truncating it would make every later answer invisible.
+        """
         self._check_world_name()
         self._check_installed_jar()
         self._check_mod_enabled()
@@ -163,13 +169,20 @@ class HarnessServer:
             shutil.copy2(self.log_path, self.log_path.with_suffix(".previous.log"))
 
         # The reply file is truncated rather than rotated: a stale reply would answer this run's
-        # first request with the last run's answer, which is a bug nobody would believe.
-        self.rpc_path.write_text("")
+        # first request with the last run's answer, which is a bug nobody would believe. On a restart
+        # it must survive instead, because the reader is already positioned in it.
+        if fresh:
+            self.rpc_path.write_text("")
+
+        # The log is always truncated, including on a restart, because _await_ready looks for the
+        # ready line anywhere in the file -- a leftover one from the previous boot would make a
+        # restart appear instant and every command after it race the server.
         self.log_path.write_text("")
 
-        world_file = self.config.appdata / "saves/worlds" / f"{self.config.world}.zip"
-        if world_file.exists():
-            world_file.unlink()
+        if fresh:
+            world_file = self.config.appdata / "saves/worlds" / f"{self.config.world}.zip"
+            if world_file.exists():
+                world_file.unlink()
 
         command = [
             str(java) if java.exists() else "java",
@@ -223,6 +236,16 @@ class HarnessServer:
 
         self.process.stdin.write(line + "\n")
         self.process.stdin.flush()
+
+    def restart(self) -> None:
+        """Stops the server and boots it again on the same world.
+
+        The stop is a clean one, so the world is saved on the way down; this is therefore the only
+        way to test that anything survives a save and a load. Costs one boot, which is by far the
+        most expensive thing in the suite -- so tests that need it should be few and say why.
+        """
+        self.stop()
+        self.start(fresh=False)
 
     def stop(self) -> None:
         if self.process is None:

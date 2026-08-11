@@ -46,10 +46,16 @@ class Harness:
         self.vocabulary = reply.data
         return reply.data
 
-    def call(self, *args: str) -> Reply:
-        """Runs a verb and returns the reply without judging it."""
-        self._history.append(" ".join(args))
-        return self.rpc.call(*args)
+    def call(self, *args) -> Reply:
+        """Runs a verb and returns the reply without judging it.
+
+        Arguments are coerced to strings, because everything on the wire is a word anyway and a test
+        reads better as ``do("bench", 0, 0, 64, 200)`` than with str() around every coordinate. Query
+        already accepted numbers, so this removes an inconsistency rather than adding leniency.
+        """
+        words = [str(arg) for arg in args]
+        self._history.append(" ".join(words))
+        return self.rpc.call(*words)
 
     def do(self, *args: str) -> Reply:
         """Runs a verb and raises unless it succeeded."""
@@ -72,6 +78,20 @@ class Harness:
             lines.insert(0, f"# ... {len(self._history) - limit} earlier commands omitted")
 
         return "\n".join(lines)
+
+    def restart(self) -> None:
+        """Restarts the server on the same world and reconnects the player.
+
+        For persistence: the stop saves the world and the boot loads it back, so anything asserted
+        after this call is being read from disk rather than from memory.
+
+        The player is re-spawned because a new process has none. Its authentication is stable, so the
+        server reuses its player file -- which means the player's own inventory persists too, and a
+        test asserting on held items after a restart is asserting about the save, not about a fresh
+        character.
+        """
+        self.server.restart()
+        self.spawn_player()
 
     def close(self) -> None:
         self.rpc.close()
