@@ -5,7 +5,7 @@
 # lines starting with # are ignored. Because every line is just a console command, any
 # prefix of a scenario can be pasted into an interactive server to debug a failure.
 #
-# Usage: run_scenario.sh [--keep] <scenario-file> [more-scenario-files...]
+# Usage: run_scenario.sh [--keep] [--scene] <file> [more-files...]
 #
 # Environment, all optional except MOD_UNDER_TEST when the layout is not the default:
 #   MOD_UNDER_TEST=<dir>   directory holding the dev mod's jar, passed to -mod. Defaults to
@@ -44,13 +44,20 @@
 set -uo pipefail
 
 KEEP_WORLD=0
-if [[ "${1:-}" == "--keep" ]]; then
-   KEEP_WORLD=1
+# A scene builds a state to look at and asserts nothing, which is a failure for a test file and
+# correct for a scene -- so it has to be stated rather than guessed from an empty result.
+SCENE=0
+while [[ "${1:-}" == --* ]]; do
+   case "$1" in
+      --keep) KEEP_WORLD=1 ;;
+      --scene) SCENE=1 ;;
+      *) echo "unknown option $1" >&2; exit 2 ;;
+   esac
    shift
-fi
+done
 
 if [[ $# -lt 1 ]]; then
-   echo "usage: $0 [--keep] <scenario-file> [more-scenario-files...]" >&2
+   echo "usage: $0 [--keep] [--scene] <file> [more-files...]" >&2
    exit 2
 fi
 
@@ -333,7 +340,22 @@ for name in "${RAN[@]}"; do
    # Silence is not success. A scenario that reports nothing has either not run, or run against a
    # mod that did not load, or been fed from a path that does not exist -- all of which previously
    # presented as a clean pass, which is the single most dangerous thing a test runner can do.
+   # An unrecognised verb is a failure in any mode. Found the hard way: --scene reported a clean run
+   # on a file whose every line the server had rejected, because a scene has no assertions to miss and
+   # the game answers an unknown command on stdout rather than with a non-zero anything.
+   unknown=$(printf '%s\n' "$section" | grep -c 'Could not find command' || true)
+   if [[ "$unknown" -gt 0 ]]; then
+      echo "--- $name: $unknown line(s) were not commands the server knows -- is 'harness' missing from the front of them?"
+      TOTAL_FAIL=$((TOTAL_FAIL + 1))
+      continue
+   fi
+
    if [[ "$passes" -eq 0 && "$failures" -eq 0 ]]; then
+      if [[ "$SCENE" -eq 1 ]]; then
+         echo "--- $name: ran, asserted nothing (--scene)"
+         continue
+      fi
+
       echo "--- $name: NO ASSERTIONS -- the scenario asserted nothing, which is treated as a failure"
       TOTAL_FAIL=$((TOTAL_FAIL + 1))
       continue
