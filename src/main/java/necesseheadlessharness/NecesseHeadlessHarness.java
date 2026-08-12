@@ -1,6 +1,7 @@
 package necesseheadlessharness;
 
 import necesse.engine.GameLog;
+import necesse.engine.Settings;
 import necesse.engine.commands.CommandsManager;
 import necesse.engine.modLoader.annotations.ModEntry;
 import necesseheadlessharness.command.HarnessCommand;
@@ -54,5 +55,34 @@ public class NecesseHeadlessHarness {
       }
 
       CommandsManager.registerServerCommand(new HarnessCommand());
+      keepTheSyntheticClientAlive();
+   }
+
+   /**
+    * Stops the server dropping the harness's player, and stops it pausing if it ever does.
+    *
+    * <p>Two server settings, both wrong for a synthetic client and both only reachable from inside the
+    * game process, which is why they are set here rather than in a config file.
+    *
+    * <p><b>The kick.</b> {@code ServerClient.tickTimeConnected} measures how long since a packet arrived
+    * <i>from</i> a client. The harness's player never sends one -- it is constructed in-process, and a
+    * session's counters read {@code Received: 0 B (0 packets)} -- so that interval grows without bound. Once
+    * it passes {@code maxClientLatencySeconds}, a counter climbs for 100 ticks and the client is disconnected
+    * as not responding. Zero disables the check.
+    *
+    * <p><b>Why that is fatal rather than untidy.</b> With no clients the server pauses, and a paused server
+    * does not call {@code world.serverTick()}, so no level ticks, so the {@code Level.serverTick} patch that
+    * drains {@link ServerThreadTasks} never runs -- and every verb after that point fails with "the server
+    * thread did not run X", permanently. The symptom is a whole suite collapsing partway through with the
+    * first failure long after the cause.
+    *
+    * <p>It went unnoticed until tests could let time pass: a suite that drove transfers by hand finished
+    * inside the timeout, while one that waits for scheduled work spends its time not sending packets. Both
+    * settings are safe for a test server and are not written to any config.
+    */
+   private static void keepTheSyntheticClientAlive() {
+      Settings.maxClientLatencySeconds = 0;
+      Settings.pauseWhenEmpty = false;
+      GameLog.out.println("Headless harness: client latency kick and empty-server pause disabled");
    }
 }
