@@ -98,6 +98,7 @@ public final class HeadlessPlayer {
       // expires after two seconds unless the container re-asserts it every tick, and a test of that
       // failed against the harness rather than against the mod.
       spawned.submitSpawnPacket(new PacketSpawnPlayer(spawned));
+      Ticks.watch(level);
 
       client = spawned;
       logs.add("headless player '" + spawned.getName() + "' connected"

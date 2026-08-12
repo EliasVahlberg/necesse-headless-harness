@@ -19,6 +19,7 @@ import necesse.engine.commands.AutoComplete;
 import necesse.engine.commands.ChatCommand;
 import necesseheadlessharness.HeadlessPlayer;
 import necesseheadlessharness.Harness;
+import necesseheadlessharness.Ticks;
 import necesseheadlessharness.ServerThreadTasks;
 import necesse.engine.commands.CommandLog;
 import necesse.engine.commands.ParsedCommand;
@@ -813,7 +814,7 @@ public class HarnessCommand extends ChatCommand {
    /** Kinds {@code expect} and {@code query} both understand without a consumer mod. */
    // 'category' and 'categories' answer about the item registry rather than about the level, so they
    // are queries with no expect counterpart -- there is nothing to assert, only something to read.
-   private static final List<String> BUILT_IN_KINDS = Arrays.asList("item", "total", "held", "category", "categories");
+   private static final List<String> BUILT_IN_KINDS = Arrays.asList("item", "total", "held", "category", "categories", "tick");
 
    /**
     * Structured fields for the reply currently being assembled, or null when a verb was invoked by
@@ -950,6 +951,11 @@ public class HarnessCommand extends ChatCommand {
          }
 
          ((TestQuery)registered).query(new TestContext(level, spawn, server, serverClient, args, logs), data);
+      } else if ("tick".equals(kind)) {
+         // The count for the level the player is on, so a client can wait for time to pass. Waiting is the
+         // client's job: a verb that slept until the count advanced would be a server-thread task waiting
+         // for the server thread.
+         data.num("tick", Ticks.count());
       } else if ("total".equals(kind)) {
          data.str("item", args.get(2)).num("count", this.totalOf(level, args.get(2)));
       } else if ("held".equals(kind)) {

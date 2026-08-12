@@ -20,13 +20,17 @@ import net.bytebuddy.asm.Advice;
  * in {@code Level}, which they call through. The queue is global and idempotent, so it does not
  * matter which level drains it, or how many do.
  *
+ * <p>It also counts ticks for {@link Ticks}, which is how a test lets time pass. That is the same hook for
+ * the same reason, so it is taken here rather than by patching a second method.
+ *
  * <p>If this patch ever fails to apply, nothing silently degrades: the command reports that the
  * server thread never picked the work up, rather than appearing to succeed.
  */
 @ModMethodPatch(target = Level.class, name = "serverTick", arguments = {})
 public class LevelServerTickPatch {
    @Advice.OnMethodExit
-   static void onExit() {
+   static void onExit(@Advice.This Level level) {
+      Ticks.onLevelTick(level);
       ServerThreadTasks.drain();
    }
 }

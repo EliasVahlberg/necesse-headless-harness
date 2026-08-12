@@ -13,6 +13,8 @@ Two deliberate choices worth knowing before writing tests against this:
 
 from __future__ import annotations
 
+import time
+
 from .process import HarnessError, HarnessServer
 from .rpc import PROTOCOL_VERSION, Reply, RpcChannel
 
@@ -78,6 +80,32 @@ class Harness:
             lines.insert(0, f"# ... {len(self._history) - limit} earlier commands omitted")
 
         return "\n".join(lines)
+
+    def tick(self) -> int:
+        """The server tick count for the level under test."""
+        return int(self.query("tick")["tick"])
+
+    def settle(self, ticks: int = 40, timeout: float = 30.0) -> int:
+        """Let `ticks` server ticks pass, and return how many actually did.
+
+        Polls rather than sleeping server-side, because a verb that waited for a tick would be a task on
+        the server thread waiting for the server thread. Polling costs one command per poll, which is the
+        reason this takes a tick count rather than a duration: a test should say how much game time it
+        needs, not how long it is prepared to sit still.
+
+        Time passing is what makes anything with a timer, a queue or a cascade testable. Without it a test
+        can only call the work directly, which verifies the arithmetic and silently skips the scheduling.
+        """
+        start = self.tick()
+        deadline = time.monotonic() + timeout
+        while True:
+            passed = self.tick() - start
+            if passed >= ticks:
+                return passed
+            if time.monotonic() > deadline:
+                raise TimeoutError(
+                    f"only {passed} of {ticks} ticks passed in {timeout}s -- is the server still ticking?"
+                )
 
     def restart(self) -> None:
         """Restarts the server on the same world and reconnects the player.

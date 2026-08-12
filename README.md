@@ -10,6 +10,25 @@ asserting what happened — with **no rendering and nobody playing the game**.
 > mod first, because the only way to find out whether an API is right is to use it for something
 > that matters. If you found this before it was announced, it works, but do not expect stability.
 
+## Letting time pass
+
+`harness query tick` reports the server tick count for the level under test, and the Python client's
+`settle(ticks)` waits for it to advance.
+
+This is the difference between testing what a piece of code computes and testing what a system does. Without
+it a consumer mod can only invoke its own work directly, one command at a time, which verifies arithmetic and
+steps over scheduling: timers, cooldowns, queues and cascades are all invisible. The first bug it found in a
+consumer was two devices moving the same items back and forth forever while every single-shot test passed --
+and, worse, while the observable totals looked settled.
+
+Waiting is the client's job on purpose. A `settle` verb that slept until the count advanced would deadlock:
+verbs run on the server thread, so a verb waiting for a tick waits for itself. The counter is exposed and
+polled instead.
+
+Counted per level, not globally: `Level.serverTick` runs once per loaded level per server tick, so a global
+count runs at a multiple of the real rate the moment a second level loads and "wait sixty ticks" silently
+waits for twenty. The level watched is the one the harness's player is on.
+
 ## Why this exists
 
 A mod's pure logic is easy to unit test and rarely where the bugs are. The bugs are in how it
