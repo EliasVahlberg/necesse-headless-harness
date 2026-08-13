@@ -31,6 +31,43 @@ public final class Ticks {
    private Ticks() {
    }
 
+   /**
+    * Something to do on every server tick, for as long as it asks to continue.
+    *
+    * <p>The reason this exists: some behaviour can only be provoked by another party acting <i>while</i> the
+    * system under test is running. A mod that stops itself when its work is being undone cannot be tested by
+    * setting up a world and letting it settle, because nothing in that world is undoing anything. A settler
+    * hauling items back, a hopper, another mod's pipe -- all of them are "somebody changes this container every
+    * tick", and this is how a scenario plays that part.
+    */
+   public interface TickAction {
+
+      /**
+       * @return true to be called again next tick, false to be removed
+       */
+      boolean run(Level level);
+   }
+
+   private static final java.util.List<TickAction> ACTIONS =
+      java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+
+   /** Registers something to run on each server tick until it returns false. */
+   public static void each(TickAction action) {
+      if (action != null) {
+         ACTIONS.add(action);
+      }
+   }
+
+   /** Drops every registered action. Called between scenarios, so one cannot outlive its test. */
+   public static void clearActions() {
+      ACTIONS.clear();
+   }
+
+   /** How many actions are running. For diagnosis. */
+   public static int actions() {
+      return ACTIONS.size();
+   }
+
    /** Called from the tick patch, on the server thread. */
    public static void onLevelTick(Level level) {
       if (level == null) {
@@ -39,6 +76,25 @@ public final class Ticks {
 
       if (!levelKnown || level.getIdentifierHashCode() == levelHash) {
          count++;
+      }
+
+      if (ACTIONS.isEmpty()) {
+         return;
+      }
+
+      // Copied before iterating, because an action is entitled to register another one or to remove itself, and
+      // because the list is shared with whatever thread a verb arrived on.
+      java.util.List<TickAction> running = new java.util.ArrayList<>(ACTIONS);
+      for (TickAction action : running) {
+         try {
+            if (!action.run(level)) {
+               ACTIONS.remove(action);
+            }
+         } catch (Throwable failure) {
+            ACTIONS.remove(action);
+            necesse.engine.GameLog.warn.println(
+               "Necesse Headless Harness: a per-tick action threw and was removed: " + failure);
+         }
       }
    }
 

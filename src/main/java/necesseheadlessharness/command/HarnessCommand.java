@@ -1138,6 +1138,12 @@ public class HarnessCommand extends ChatCommand {
    private void ensureRegionLoaded(Level level, Point spawn, ArrayList<String> args) {
       String sub = args.get(0).toLowerCase();
 
+      // Anything a previous scenario left running stops here. A per-tick action that outlived its test would
+      // quietly change the world under the next one, which is the hardest kind of test failure to read.
+      if ("clear".equals(sub) || "reset".equals(sub)) {
+         Ticks.clearActions();
+      }
+
       // clear takes a radius rather than a coordinate, and works outward from spawn.
       if ("clear".equals(sub)) {
          int radius = args.size() > 1 ? Integer.parseInt(args.get(1)) : 0;
