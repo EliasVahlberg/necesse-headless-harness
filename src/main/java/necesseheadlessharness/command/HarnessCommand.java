@@ -16,10 +16,12 @@ import java.util.Map;
 import java.util.Arrays;
 
 import necesse.engine.commands.AutoComplete;
+import necesse.engine.gameLoop.tickManager.TickManager;
 import necesse.engine.commands.ChatCommand;
 import necesseheadlessharness.HeadlessPlayer;
 import necesseheadlessharness.Harness;
 import necesseheadlessharness.Ticks;
+import necesseheadlessharness.ManualTicks;
 import necesseheadlessharness.ServerThreadTasks;
 import necesse.engine.commands.CommandLog;
 import necesse.engine.commands.ParsedCommand;
@@ -218,6 +220,12 @@ public class HarnessCommand extends ChatCommand {
                return this.runScenario(server, serverClient, args, logs);
             case "player":
                return this.player(server, level, args, logs);
+            case "timescale":
+               return this.timescale(args, logs);
+            case "ticks":
+               return this.ticksMode(args, logs);
+            case "tick":
+               return this.grantTicks(server, args, logs);
             default:
                TestVerb verb = Harness.verb(sub);
                if (verb == null) {
@@ -772,6 +780,122 @@ public class HarnessCommand extends ChatCommand {
    }
 
    /**
+    * {@code ticks [manual|auto]} -- detaches game time from the wall clock, or reports the mode.
+    *
+    * <p>In manual mode the world advances only when {@code tick} grants it. See {@link ManualTicks} for the
+    * measurements behind this and for why speeding the clock up instead was tried and abandoned.
+    *
+    * <p>Reports the mode with no argument, so a scenario can assert the execution model it is relying on
+    * rather than assume it.
+    */
+   private boolean ticksMode(ArrayList<String> args, CommandLog logs) {
+      if (args.size() < 2) {
+         logs.add("PASS ticks " + (ManualTicks.isManual() ? "manual" : "auto")
+            + ", " + ManualTicks.remaining() + " granted and unspent");
+         return true;
+      }
+
+      String mode = args.get(1).toLowerCase();
+      if ("manual".equals(mode)) {
+         // Optional frame rate, because it is the ceiling on command latency and the right value is a
+         // property of the machine rather than of the harness.
+         int frames = ManualTicks.DEFAULT_MANUAL_FPS;
+         if (args.size() >= 3) {
+            try {
+               frames = Integer.parseInt(args.get(2));
+            } catch (NumberFormatException malformed) {
+               logs.add("FAIL ticks manual wants a frame rate, got '" + args.get(2) + "'");
+               return false;
+            }
+         }
+
+         if (!ManualTicks.enable(frames)) {
+            logs.add("FAIL the server loop has not reported a frame yet, so its pacing cannot be changed");
+            return false;
+         }
+
+         logs.add("PASS ticks manual at " + frames + " frames -- the world advances only when granted");
+         return true;
+      }
+
+      if ("auto".equals(mode)) {
+         if (!ManualTicks.disable()) {
+            logs.add("FAIL the server loop has not reported a frame yet, so its pacing cannot be changed");
+            return false;
+         }
+
+         logs.add("PASS ticks auto -- the world advances on its own clock");
+         return true;
+      }
+
+      logs.add("FAIL ticks wants 'manual' or 'auto', got '" + args.get(1) + "'");
+      return false;
+   }
+
+   /**
+    * {@code tick [count]} -- runs `count` game ticks immediately. Defaults to one.
+    *
+    * <p><b>The ticks are run here, synchronously, rather than handed to the loop as a budget</b>, and that
+    * choice is worth explaining because the budget version was written first and measured badly. Granting
+    * and returning meant the client had to poll for completion, and each poll is a command served on the
+    * server thread -- so the polling competed with the very loop it was waiting for. Measured: 6.4ms per
+    * tick, when spending them costs a fraction of that. The client was measuring its own round trips.
+    *
+    * <p>Running them here costs one command for any number of ticks and no polling at all. It is safe for
+    * the same reason the rest of the harness marshals onto this thread: a verb already executes on the
+    * server thread, which is where the loop calls {@code tick()} from anyway. The only difference is that
+    * it happens at the tail of {@code frameTick} rather than just before it, which is a difference in
+    * ordering within an iteration and not in which thread holds what.
+    *
+    * <p>The budget still exists and is still claimed one per tick, because {@link ServerTickPatch} gates
+    * every call to {@code Server.tick()} including these. Granting first and then spending immediately is
+    * what distinguishes a tick this verb asked for from one the clock would have run on its own.
+    *
+    * <p>Refused outside manual mode rather than silently doing nothing: a test that runs ticks while the
+    * clock is also running gets the ones it asked for plus however many arrived by themselves, which is not
+    * the determinism it came for.
+    */
+   private boolean grantTicks(Server server, ArrayList<String> args, CommandLog logs) {
+      if (!ManualTicks.isManual()) {
+         logs.add("FAIL tick needs manual mode; run 'ticks manual' first");
+         return false;
+      }
+
+      long count = 1L;
+      if (args.size() >= 2) {
+         try {
+            count = Long.parseLong(args.get(1));
+         } catch (NumberFormatException malformed) {
+            logs.add("FAIL tick wants a whole number, got '" + args.get(1) + "'");
+            return false;
+         }
+      }
+
+      if (count < 1L) {
+         logs.add("FAIL tick wants at least one, got " + count);
+         return false;
+      }
+
+      ManualTicks.grant(count);
+      long ran = 0L;
+      for (long i = 0L; i < count; i++) {
+         try {
+            server.tick();
+            ran++;
+         } catch (Throwable failure) {
+            // Reported rather than swallowed: a tick that throws is the interesting part of the run, and a
+            // test told "3 of 60 ticks ran" can act on that where one told nothing cannot.
+            logs.add("FAIL tick " + (i + 1) + " of " + count + " threw: " + failure);
+            ManualTicks.clearBudget();
+            return false;
+         }
+      }
+
+      logs.add("PASS ran " + ran + " tick" + (ran == 1L ? "" : "s"));
+      return true;
+   }
+
+   /**
     * Quick-stacks into the network: tops up what the network already holds and moves nothing
     * else. Asserting the difference from depositall is the point of testing it separately.
     */
@@ -787,6 +911,64 @@ public class HarnessCommand extends ChatCommand {
    }
 
    /** Restocks the player's stacks from the network. */
+   /**
+    * {@code timescale [multiplier]} -- how fast the server runs, or reports it with no argument.
+    *
+    * <p><b>This is the single biggest lever on suite runtime, and it exists because waiting is unavoidable
+    * but waiting <i>in real time</i> is not.</b> Anything with a timer, a queue or a cascade can only be
+    * tested by letting ticks pass, and the server paces itself to 20 ticks a second, so a suite that needs
+    * a few thousand ticks spends minutes asleep. Measured on the first consumer: 3713 ticks across 93
+    * waits, 186 seconds of a 333-second run, doing nothing at all.
+    *
+    * <p>The engine already has the control. {@link TickManager#globalTimeMod} is a public static float that
+    * divides the loop's sleep and scales its deltas, and the game itself drives it from a debug key in both
+    * {@code MainMenu} and {@code MainGame}. So this is the game's own fast-forward rather than a trick, and
+    * game time keeps advancing at the same rate per tick -- x10 means ten times as many ticks per second,
+    * each one worth what it was worth before.
+    *
+    * <p><b>Measured on a headless test world, it scales linearly and further than expected:</b> x1 gave 22.8
+    * ticks a second, x5 gave 99.5, x10 gave 200.0, x20 gave 399.9, x50 gave 998.8 and x100 gave 2001.6. An
+    * earlier version of this comment predicted a plateau around x50 on the reasoning that the loop skips
+    * sleeps under 1ms; that was wrong, because skipping the sleep is precisely what lets it run flat out.
+    * The real ceiling is how long a tick takes to compute, which on a small world is nowhere near reached.
+    *
+    * <p>A level heavy enough that a tick costs more than its budget will simply tick slower than asked --
+    * which is why {@code settle} reports how many ticks actually passed instead of assuming.
+    *
+    * <p>One boundary is known to matter: saving. See {@code Harness.restart} in the Python client, which
+    * drops back to x1 around a restart because of a failure that was observed there and never explained.
+    *
+    * <p>Deliberately not clamped to sane values. A scenario that wants x1 to reproduce a race in real time
+    * is a legitimate thing to want, and a harness that second-guesses it is harder to debug than one that
+    * does as it is told.
+    */
+   private boolean timescale(ArrayList<String> args, CommandLog logs) {
+      // args.get(0) is the subcommand itself, matching every other verb here.
+      if (args.size() < 2) {
+         logs.add("PASS timescale x" + TickManager.globalTimeMod);
+         return true;
+      }
+
+      float requested;
+      try {
+         requested = Float.parseFloat(args.get(1));
+      } catch (NumberFormatException malformed) {
+         logs.add("FAIL timescale wants a number, got '" + args.get(1) + "'");
+         return false;
+      }
+
+      // Zero would divide the sleep by zero and park the loop forever; negative would run it backwards into
+      // an ever-growing sleep debt. Both are silent hangs rather than errors, so they are refused here.
+      if (!(requested > 0.0F) || Float.isInfinite(requested) || Float.isNaN(requested)) {
+         logs.add("FAIL timescale must be a positive finite multiplier, got " + requested);
+         return false;
+      }
+
+      TickManager.globalTimeMod = requested;
+      logs.add("PASS timescale x" + requested);
+      return true;
+   }
+
    private boolean restock(ServerClient serverClient, CommandLog logs) {
       Container container = this.requireContainer(serverClient, logs, "restock");
       if (container == null) {
@@ -809,7 +991,7 @@ public class HarnessCommand extends ChatCommand {
     */
    private static final List<String> BUILT_IN_VERBS = Arrays.asList(
       "place", "fill", "clear", "break", "give", "open", "close", "click", "craft", "quickstack",
-      "restock", "expect", "query", "player", "run", "echo", "hello", "rpc");
+      "restock", "expect", "query", "player", "run", "timescale", "ticks", "tick", "echo", "hello", "rpc");
 
    /** Kinds {@code expect} and {@code query} both understand without a consumer mod. */
    // 'category' and 'categories' answer about the item registry rather than about the level, so they

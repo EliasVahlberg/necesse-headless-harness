@@ -20,8 +20,11 @@ import net.bytebuddy.asm.Advice;
  * in {@code Level}, which they call through. The queue is global and idempotent, so it does not
  * matter which level drains it, or how many do.
  *
- * <p>It also counts ticks for {@link Ticks}, which is how a test lets time pass. That is the same hook for
- * the same reason, so it is taken here rather than by patching a second method.
+ * <p><b>The drain has moved to {@link ServerFrameTickPatch}</b>, and this patch now only counts ticks.
+ * Manual tick mode skips {@code Server.tick()} entirely, so anything draining from inside it stops being
+ * reached -- including the verb that would grant the next tick. Counting still belongs here, because
+ * {@code Level.serverTick} is precisely what a test means by "a tick passed": it is the thing being
+ * withheld, so counting its invocations reports game time under either mode without special-casing either.
  *
  * <p>If this patch ever fails to apply, nothing silently degrades: the command reports that the
  * server thread never picked the work up, rather than appearing to succeed.
@@ -31,6 +34,5 @@ public class LevelServerTickPatch {
    @Advice.OnMethodExit
    static void onExit(@Advice.This Level level) {
       Ticks.onLevelTick(level);
-      ServerThreadTasks.drain();
    }
 }

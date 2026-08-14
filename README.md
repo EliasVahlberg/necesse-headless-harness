@@ -12,8 +12,8 @@ asserting what happened — with **no rendering and nobody playing the game**.
 
 ## Letting time pass
 
-`harness query tick` reports the server tick count for the level under test, and the Python client's
-`settle(ticks)` waits for it to advance.
+`harness query tick` reports the server tick count for the level under test. The Python client's
+`settle(ticks)` gets that much game time to pass.
 
 This is the difference between testing what a piece of code computes and testing what a system does. Without
 it a consumer mod can only invoke its own work directly, one command at a time, which verifies arithmetic and
@@ -21,13 +21,72 @@ steps over scheduling: timers, cooldowns, queues and cascades are all invisible.
 consumer was two devices moving the same items back and forth forever while every single-shot test passed --
 and, worse, while the observable totals looked settled.
 
-Waiting is the client's job on purpose. A `settle` verb that slept until the count advanced would deadlock:
-verbs run on the server thread, so a verb waiting for a tick waits for itself. The counter is exposed and
-polled instead.
-
 Counted per level, not globally: `Level.serverTick` runs once per loaded level per server tick, so a global
 count runs at a multiple of the real rate the moment a second level loads and "wait sixty ticks" silently
 waits for twenty. The level watched is the one the harness's player is on.
+
+### Game time is detached from the wall clock by default
+
+Ticks are **granted**, not waited for. `ticks manual` stops the server's game tick, and `tick N` runs exactly
+N of them on demand. On the first consumer's 163 tests this took the suite from **333 seconds to 20**.
+
+Two measurements say why it was worth doing, and they are the same fact seen twice:
+
+| | Before | After |
+|---|---|---|
+| One game tick | 50ms (the server's fixed 20/second) | ~0.2ms, granted |
+| One harness command | **49.89ms** -- exactly one tick | ~1.3ms |
+| Suite of 163 tests | 333s | 20s |
+
+A command cost a whole tick because every verb is marshalled onto the server thread and the caller waits for
+the next tick to pick it up. So 186 of those 333 seconds were `settle` polling, and most of the rest was
+command latency. Nothing was slow; everything was waiting.
+
+**Determinism matters more than the speed.** Nothing ticks between a test's commands, so a fixture placing
+seven objects is atomic in game time and the systems under test cannot act on a half-built world. A test that
+asks for sixty ticks gets sixty, deliberately, rather than however many fitted into three seconds.
+
+`ticks auto` returns to the clock. Per test, the pytest marker `realtime` does the same, for the one case that
+genuinely needs it: a test asserting about *real* elapsed time cannot be stepped past, because granting ticks
+does not advance the wall clock. `--clock-ticks` runs a whole suite on the clock, which is the control for
+deciding whether detached ticks are involved in a failure.
+
+### How it works, and two ways it can be got wrong
+
+The engine makes this possible by separating the two rates itself. `ServerGameLoop.update` calls
+`server.tick()` only when `isGameTick()` is set, and calls `server.frameTick()` on **every** iteration -- and
+`Server.frameTick` is where `packetManager.tickNetworkManager()` and the packet drain live. Networking
+therefore survives frozen game time, so commands arrive, execute and are answered while nothing in the world
+moves. Had packet processing been inside `tick()`, this approach would deadlock instead of work.
+
+So: `ServerTickPatch` gates `Server.tick()` on a granted budget, and `ServerFrameTickPatch` drains queued
+verbs from the frame instead of the level tick. **That move is what makes the freeze usable rather than a
+hang** -- the queue used to be drained inside `Server.tick()`, which is the very thing being skipped, so the
+verb that would grant the next tick would have been waiting for a tick to be run.
+
+Two things were tried first and are recorded because neither is obviously wrong:
+
+- **Speeding the clock up instead of stopping it.** `TickManager.globalTimeMod` is the game's own
+  fast-forward, and at x20 the suite ran in 48 seconds -- and went flaky, three or four failures a run, never
+  the same ones, each passing in isolation. The speed corrupted nothing. Setup had been *accidentally* atomic
+  because a fixture's commands each took a tick, and acceleration removed the accident. `timescale` remains as
+  a verb for use with `--clock-ticks`.
+- **Driving the loop with `globalTimeMod` rather than `maxFPS`.** These look equivalent and are not: the
+  modifier also scales `TickManager.getDelta()`, which `frameTick` passes to `tickMovement` every iteration,
+  so a large value makes the synthetic player move a hundred times too fast. Manual mode raises `maxFPS`
+  instead, leaving deltas honest; the frame rate matters only because the frame is where commands are drained,
+  making it the ceiling on command latency.
+
+### What detaching time will expose in a consumer
+
+Removing the free settling between commands surfaces anything that was relying on it. Expect this, because it
+is information rather than breakage: in the first consumer it found a real bug -- a bus numbering itself
+against a peer that had been removed but not yet swept out of `entityManager`, reachable in play by breaking
+and rebuilding within one tick -- and two test fixtures that cleared state and then ticked, letting
+not-yet-removed entities rebuild what had just been cleared.
+
+The general shape is engine work deferred to a tick: entity removal above all. A fixture wanting a clean world
+should settle, clear, then settle again.
 
 ## Why this exists
 
@@ -131,6 +190,10 @@ Generic, because they can be said without knowing your mod:
 | `quickstack` / `restock` | the engine's own slot conventions, so they work on vanilla chests |
 | `expect item\|total\|held` | assertions |
 | `player spawn\|despawn` | the socketless client |
+| `ticks manual [fps]\|auto` | detach game time from the clock, or reattach it; reports the mode with no argument |
+| `tick [n]` | run n game ticks now. Manual mode only, so that a test cannot get its ticks *plus* the clock's |
+| `timescale [x]` | the game's own fast-forward, for use with `--clock-ticks`. Ignored under manual ticks |
+| `query tick` | how much game time has passed on the watched level |
 | `run <name>` / `echo <text>` | compose and annotate |
 
 Coordinates are **relative to the world spawn tile**, so scenarios do not depend on the seed.

@@ -105,7 +105,11 @@ class RpcChannel:
                         f"no reply to request {request_id} within {timeout}s. A deadlock does not "
                         f"stop Necesse, so this is more likely a hang than slowness.{detail}")
 
-                time.sleep(0.005)
+                # 0.5ms rather than 5ms. Once the server stopped serving commands at the tick rate, this
+                # poll became the floor on command latency: measured 5.10ms per command against a server
+                # answering in well under one, which is this sleep and nothing else. A suite issuing a few
+                # thousand commands paid tens of seconds for it.
+                time.sleep(0.0005)
 
     def _drain(self) -> bool:
         """Parses whatever complete replies are available. True if at least one was parsed.

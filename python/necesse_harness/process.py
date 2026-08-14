@@ -64,6 +64,48 @@ class ServerConfig:
     #: Seconds to wait for any single command's reply.
     command_timeout: float = 30.0
 
+    #: How fast the server runs **while a test is waiting in** ``Harness.settle``, as a multiplier on
+    #: its 20 ticks a second. Outside settle the server always runs at x1.
+    #:
+    #: This is the one knob that changes suite runtime by minutes rather than seconds. Anything with a
+    #: timer, a queue or a cascade can only be tested by letting ticks pass, and at x1 those waits are
+    #: real seconds: the first consumer spent 186 of its 333 seconds asleep, waiting out 3713 ticks.
+    #:
+    #: Raising it is not a trick played on the engine -- ``TickManager.globalTimeMod`` is the game's own
+    #: fast-forward, driven from a debug key in ``MainMenu`` and ``MainGame``. Game time per tick is
+    #: unchanged; the ticks simply arrive sooner. Measured on a small headless world it scales linearly
+    #: well past where it was expected to plateau: x10 gave 200 ticks a second, x20 gave 400, x100 gave
+    #: 2000.
+    #:
+    #: **Why only inside settle**, which is worth stating because running the whole session fast is the
+    #: obvious thing to try and it does not work: every harness command is a round trip, so at x1 a
+    #: fixture placing seven objects fits inside about one tick, and at x20 it spans a few hundred. The
+    #: devices under test then start working on a half-built network, and the suite goes flaky in a way
+    #: that moves between runs. Confining the speed to the one method whose job is waiting keeps setup
+    #: atomic and still collects almost all of the saving.
+    #:
+    #: Set to 1.0 to reproduce anything that only misbehaves at real speed.
+    time_scale: float = float(os.environ.get("HARNESS_TIME_SCALE", "20"))
+
+    #: Whether game time is detached from the wall clock, so tests grant ticks instead of waiting.
+    #:
+    #: This is the default execution model and the one to prefer. It is faster -- a granted tick costs
+    #: microseconds where a waited one costs a fiftieth of a second -- and, more importantly, it is
+    #: deterministic: nothing ticks between a test's commands, so setup cannot be raced by the systems
+    #: under test. ``time_scale`` only applies when this is off.
+    #:
+    #: Turn it off to run the world on its own clock, which is what a test asserting about real elapsed
+    #: time needs. The ``realtime`` pytest marker does that per test.
+    manual_ticks: bool = os.environ.get("HARNESS_MANUAL_TICKS", "1") not in ("0", "false", "False")
+
+    #: Frames a second while manual ticks are in force.
+    #:
+    #: The frame is where queued verbs are drained, so this is the ceiling on command latency: at the
+    #: server's usual twenty it is 50ms, which is what a command cost before any of this. Higher is faster
+    #: but runs the engine's own per-frame work -- packet processing, movement integration -- more often
+    #: than it was written for, so it is exposed rather than fixed.
+    manual_fps: int = int(os.environ.get("HARNESS_MANUAL_FPS", "1000"))
+
     work_dir: Path | None = None
 
     def resolved_work_dir(self) -> Path:

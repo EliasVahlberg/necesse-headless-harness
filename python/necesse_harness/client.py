@@ -48,20 +48,23 @@ class Harness:
         self.vocabulary = reply.data
         return reply.data
 
-    def call(self, *args) -> Reply:
+    def call(self, *args, timeout: float | None = None) -> Reply:
         """Runs a verb and returns the reply without judging it.
 
         Arguments are coerced to strings, because everything on the wire is a word anyway and a test
         reads better as ``do("bench", 0, 0, 64, 200)`` than with str() around every coordinate. Query
         already accepted numbers, so this removes an inconsistency rather than adding leniency.
+
+        ``timeout`` overrides the configured per-command limit, for the few verbs whose work is
+        unbounded by nature -- running a few thousand game ticks is one command but a lot of work.
         """
         words = [str(arg) for arg in args]
         self._history.append(" ".join(words))
-        return self.rpc.call(*words)
+        return self.rpc.call(*words, timeout=timeout)
 
-    def do(self, *args: str) -> Reply:
+    def do(self, *args: str, timeout: float | None = None) -> Reply:
         """Runs a verb and raises unless it succeeded."""
-        reply = self.call(*args)
+        reply = self.call(*args, timeout=timeout)
         if not reply.ok:
             raise HarnessError(reply.describe() + "\n\nas a scenario:\n" + self.as_scenario())
 
@@ -85,27 +88,89 @@ class Harness:
         """The server tick count for the level under test."""
         return int(self.query("tick")["tick"])
 
-    def settle(self, ticks: int = 40, timeout: float = 30.0) -> int:
-        """Let `ticks` server ticks pass, and return how many actually did.
+    def set_time_scale(self, multiplier: float) -> None:
+        """Sets how fast the server runs, as a multiplier on its 20 ticks a second.
 
-        Polls rather than sleeping server-side, because a verb that waited for a tick would be a task on
-        the server thread waiting for the server thread. Polling costs one command per poll, which is the
-        reason this takes a tick count rather than a duration: a test should say how much game time it
-        needs, not how long it is prepared to sit still.
+        See ``ServerConfig.time_scale`` for why this matters more than anything else here. Applied once
+        per session by the plugin, so a test only calls this to override it -- typically down to 1.0 to
+        reproduce something that only happens at real speed.
+        """
+        self.do("timescale", str(multiplier))
+
+    def set_manual_ticks(self, manual: bool) -> None:
+        """Detaches game time from the wall clock, or reattaches it.
+
+        In manual mode the world advances only when :meth:`step` grants it. See ``ManualTicks`` on the Java
+        side for the measurements behind this; the short version is that a headless suite spends nearly all
+        its time waiting, and granting ticks is both faster and more deterministic than waiting for them.
+        """
+        if manual:
+            self.do("ticks", "manual", str(self.server.config.manual_fps))
+        else:
+            self.do("ticks", "auto")
+
+    def step(self, ticks: int = 1, timeout: float = 120.0) -> int:
+        """Runs `ticks` game ticks and returns how many actually passed.
+
+        One command, no polling. The server runs the ticks inside the verb, which is the whole reason this
+        is fast: the first version handed the loop a budget and polled for completion, and since each poll
+        is itself a command served on the server thread, the polling competed with the loop it was waiting
+        for -- 6.4ms per tick, nearly all of it the client's own round trips.
+
+        The returned count is read back from the server rather than assumed, because "how much game time
+        passed" is the one thing a test using this actually depends on.
+
+        The timeout is generous because a single call can legitimately ask for thousands of ticks, and every
+        one of them is real work the server has to do.
+        """
+        before = self.tick()
+        self.do("tick", str(ticks), timeout=timeout)
+        return self.tick() - before
+
+    def settle(self, ticks: int = 40, timeout: float = 30.0, accelerate: bool = True) -> int:
+        """Let `ticks` server ticks pass, and return how many actually did.
 
         Time passing is what makes anything with a timer, a queue or a cascade testable. Without it a test
         can only call the work directly, which verifies the arithmetic and silently skips the scheduling.
+
+        **How the ticks are obtained depends on the execution model, and the difference is worth knowing
+        because it changes what the test is asserting.** Under manual ticks -- the default -- this grants
+        exactly `ticks` and returns when they are spent, so the test gets the game time it asked for and no
+        more. Under the clock it polls until that many have gone by at the server's own rate, so the test
+        also gets however much wall time that took, and anything else in the world gets to act during it.
+
+        Manual is both faster and stricter, and the strictness is the point. Two earlier attempts at speed
+        are recorded in ``ManualTicks`` because they failed instructively: running the whole session at x20
+        cut 333 seconds to 48 and made the suite flaky, because setup had been relying on a fixture's
+        commands fitting inside a single tick, and marking the flaky tests individually was chasing that
+        symptom rather than the cause.
+
+        ``accelerate=False``, or the ``realtime`` marker, forces the clock. Use it when the question
+        involves real elapsed time rather than game time -- a timeout measured in seconds cannot be
+        fast-forwarded, and stepping past it would not answer the question the test is asking.
         """
-        start = self.tick()
-        deadline = time.monotonic() + timeout
-        while True:
-            passed = self.tick() - start
-            if passed >= ticks:
-                return passed
-            if time.monotonic() > deadline:
-                raise TimeoutError(
-                    f"only {passed} of {ticks} ticks passed in {timeout}s -- is the server still ticking?"
-                )
+        if accelerate and self.server.config.manual_ticks:
+            return self.step(ticks, timeout=timeout)
+
+        scale = self.server.config.time_scale if accelerate else 1.0
+        if scale != 1.0:
+            self.set_time_scale(scale)
+        try:
+            start = self.tick()
+            deadline = time.monotonic() + timeout
+            while True:
+                passed = self.tick() - start
+                if passed >= ticks:
+                    return passed
+                if time.monotonic() > deadline:
+                    raise TimeoutError(
+                        f"only {passed} of {ticks} ticks passed in {timeout}s -- is the server still "
+                        f"ticking? (time scale x{scale})"
+                    )
+                time.sleep(0.002)
+        finally:
+            if scale != 1.0:
+                self.set_time_scale(1.0)
 
     def restart(self) -> None:
         """Restarts the server on the same world and reconnects the player.
@@ -117,11 +182,42 @@ class Harness:
         server reuses its player file -- which means the player's own inventory persists too, and a
         test asserting on held items after a restart is asserting about the save, not about a fresh
         character.
+
+        **Manual tick mode does not survive the restart and is re-established here.** It is server-side
+        state, so a fresh JVM starts on the clock; without this every test after a restart would silently
+        change execution model. An earlier version of this method also dropped the time scale around the
+        save, to work around a bus network coming back as ``nobus`` after a reload -- that failure was a
+        symptom of running the whole session accelerated, and it went away once time stopped running
+        between commands at all.
         """
+        # Auto first, for the same reason close() does it: the stop inside restart saves the world, and
+        # saving needs ticks. Frozen, the restart would cost the full kill timeout instead of a clean save,
+        # which would also make this the one method that cannot test persistence.
+        if self.server.config.manual_ticks:
+            self.set_manual_ticks(False)
+
         self.server.restart()
         self.spawn_player()
+        if self.server.config.manual_ticks:
+            self.set_manual_ticks(True)
 
     def close(self) -> None:
+        """Releases the connection, returning the world to its own clock first.
+
+        **The clock has to come back before the server is asked to stop**, and the cost of forgetting is
+        specific: a clean shutdown saves the world and disconnects clients, and that work happens on game
+        ticks. With ticks frozen the server accepts ``stop`` and then makes no progress, so the client waits
+        out its full 45-second kill timeout on every session. Measured exactly that, as a 45.36s teardown
+        against a 3.10s boot -- the entire fixed cost of a run, hidden in the one phase nobody watches.
+        """
+        try:
+            if self.server.config.manual_ticks:
+                self.set_manual_ticks(False)
+        except Exception:
+            # Best effort. A server already gone cannot be handed its clock back, and failing here would
+            # replace a real test result with a teardown error.
+            pass
+
         self.rpc.close()
 
     # -- world ----------------------------------------------------------------------------------

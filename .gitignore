@@ -83,3 +83,7 @@ latest-log.txt
 
 # Local virtualenv for the Python client. Not part of the mod.
 .venv/
+
+# Python bytecode. Generated, and was tracked by oversight.
+__pycache__/
+*.py[cod]
