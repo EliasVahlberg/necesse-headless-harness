@@ -273,8 +273,12 @@ public class HarnessCommand extends ChatCommand {
          return false;
       }
 
-      // setObject creates the object entity itself, so nothing else is needed here.
+      // setObject creates the object entity, but it does not call GameObject.placeObject -- nothing in the engine
+      // does except the item that places one. So this calls it, for the same reason 'break' runs the destroy path:
+      // placement is where a mod learns that the world changed shape, and a harness that skipped it could only test
+      // objects that happen not to care. 'byPlayer' is false because no player placed this.
       level.setObject(x, y, objectID);
+      ObjectRegistry.getObject(objectID).placeObject(level, 0, x, y, 0, false);
       logs.add("placed " + what + " at " + args.get(2) + "," + args.get(3));
       return true;
    }
@@ -325,10 +329,32 @@ public class HarnessCommand extends ChatCommand {
       return true;
    }
 
-   /** {@code break <dx> <dy>} — clears the tile, as destroying the object would. */
+   /**
+    * {@code break <dx> <dy>} — destroys the object through the engine's own path.
+    *
+    * <p><b>This used to be {@code level.setObject(x, y, 0)} and nothing else, and that was wrong in a way worth
+    * recording.</b> Removing an object by assignment skips {@code GameObject.onDestroyed}, which is where the game and
+    * every mod put the cleanup that a break implies: dropping the object as an item, releasing whatever the tile had
+    * claimed elsewhere, invalidating caches keyed on the layout. So a harness break looked like a break and behaved
+    * like the tile having quietly never existed — and any bug in a mod's cleanup was invisible to every test that
+    * used it. One was: a mod tracking devices by tile kept its entries forever, because the only code that removed
+    * them ran in {@code onDestroyed}.
+    *
+    * <p>{@code DamagedObjectEntity.destroyObject} is the same call the mining path makes. Items are dropped as they
+    * would be in play rather than suppressed: a test that wants a clean floor can clear it, and a break that silently
+    * destroyed the object's own drop would be the previous mistake in a new place.
+    */
    private boolean breakObject(Level level, Point spawn, ArrayList<String> args, CommandLog logs) {
       int x = spawn.x + Integer.parseInt(args.get(1));
       int y = spawn.y + Integer.parseInt(args.get(2));
+
+      GameObject object = level.getObject(x, y);
+      if (object != null && object.getID() != 0) {
+         necesse.entity.DamagedObjectEntity.destroyObject(level, 0, x, y, null, null, new ArrayList<>(), true);
+      }
+
+      // Still assigned afterwards, because destroyObject runs the consequences of a break without performing the
+      // removal itself: its callers set the tile. An object that has already removed itself is unaffected.
       level.setObject(x, y, 0);
       logs.add("broke object at " + args.get(1) + "," + args.get(2));
       return true;
@@ -714,6 +740,10 @@ public class HarnessCommand extends ChatCommand {
       for (int y = spawn.y - radius; y <= spawn.y + radius; y++) {
          for (int x = spawn.x - radius; x <= spawn.x + radius; x++) {
             if (level.getObjectID(x, y) != 0) {
+               // Through the engine's destroy path, for the reason breakObject explains: an object removed by
+               // assignment never runs its own cleanup, so a cleared world can leave a mod believing in tiles that no
+               // longer exist -- and the next test then fails for a reason belonging to the previous one.
+               necesse.entity.DamagedObjectEntity.destroyObject(level, 0, x, y, null, null, new ArrayList<>(), true);
                level.setObject(x, y, 0);
                objectsCleared++;
             }
@@ -724,8 +754,23 @@ public class HarnessCommand extends ChatCommand {
          }
       }
 
-      logs.add("cleared " + objectsCleared + " objects within " + radius + " tiles of spawn"
-         + (tileID >= 0 ? ", tiles set to " + args.get(2) : ""));
+      // Sweeping the floor is part of clearing, and became necessary when clearing started running the engine's
+      // destroy path: an object destroyed properly drops itself, and a chest or a storage unit drops its contents. So
+      // a cleared world was leaving a heap of pickups where the last test's base had been -- which the player then
+      // walked into, and the next test failed on an inventory it had never filled.
+      int pickupsRemoved = 0;
+      for (necesse.entity.pickup.PickupEntity pickup
+            : level.entityManager.pickups.stream().collect(java.util.stream.Collectors.toList())) {
+         int tileX = pickup.getTileX();
+         int tileY = pickup.getTileY();
+         if (Math.abs(tileX - spawn.x) <= radius && Math.abs(tileY - spawn.y) <= radius) {
+            pickup.remove();
+            pickupsRemoved++;
+         }
+      }
+
+      logs.add("cleared " + objectsCleared + " objects and " + pickupsRemoved + " pickups within " + radius
+         + " tiles of spawn" + (tileID >= 0 ? ", tiles set to " + args.get(2) : ""));
       return true;
    }
 
