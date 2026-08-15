@@ -283,6 +283,60 @@ class Harness:
     def held(self, item: str) -> int:
         return self.query("held", item)["count"]
 
+    # -- loading -----------------------------------------------------------------------------------
+    #
+    # Necesse drops what nobody is near, on a thirty-second timer, and object entities live in regions rather
+    # than in levels -- so a chest can be absent from memory while its level is fully loaded. A suite that runs
+    # in milliseconds never sees that happen, which is how the first consumer shipped a wireless terminal that
+    # pinned the level and not the region: only a human playing the game could reproduce it. These make the
+    # timer's outcome reachable on demand.
+
+    def unload_region(self, dx: int, dy: int) -> Reply:
+        """Drop the region holding a tile, saving it, as the engine's own sweep would."""
+        return self.do("unload", "region", str(dx), str(dy))
+
+    def load_region(self, dx: int, dy: int) -> Reply:
+        """Load the region holding a tile, synchronously. Generates it if there is no save file."""
+        return self.do("load", "region", str(dx), str(dy))
+
+    def region(self, dx: int, dy: int) -> dict:
+        """Loaded state, unload buffer, and region coordinates -- the last so a test can tell whether an offset
+        actually crosses a boundary. A region is 16 tiles, so nearby offsets share the player's own."""
+        return self.query("region", dx, dy)
+
+    def region_loaded(self, dx: int, dy: int) -> bool:
+        return self.region(dx, dy)["loaded"]
+
+    def distant_offset(self, regions: int = 6) -> tuple[int, int]:
+        """An offset far enough from the player to be in another region, and still inside the level.
+
+        Needed because a region is only 16 tiles and the player's client keeps its own nearby regions loaded --
+        ServerClient.tick calls getRegion(..., load) for every region in its set every tick, so unloading one
+        near the player is undone before the next command arrives. A test that wants an unload to stick has to
+        work at a distance, and the distance depends on the level's size, so it cannot be a constant.
+        """
+        level = self.query("level")
+        spawn_x, spawn_y = level["spawnx"], level["spawny"]
+        reach = regions * 16
+
+        def pick(spawn: int, extent: int) -> int:
+            if extent <= 0:
+                return spawn + reach
+            if spawn + reach < extent - 8:
+                return spawn + reach
+            return max(8, spawn - reach)
+
+        return pick(spawn_x, level["tilewidth"]) - spawn_x, pick(spawn_y, level["tileheight"]) - spawn_y
+
+    def set_auto_unload(self, automatic: bool) -> Reply:
+        """The engine's unload sweeps, or neither.
+
+        Turn them off around a test that grants hundreds of ticks: in manual mode the sweep's thirty-one seconds
+        pass in no wall-clock time, so a long test can have its world dismantled for reasons unrelated to what it
+        is testing. On is the engine's behaviour and the default.
+        """
+        return self.do("autounload", "on" if automatic else "off")
+
     def expect(self, kind: str, *args) -> Reply:
         """The in-game assertion, kept for parity with scenarios. Prefer query plus assert."""
         return self.call("expect", kind, *(str(a) for a in args))

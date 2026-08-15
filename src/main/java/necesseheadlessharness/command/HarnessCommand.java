@@ -20,6 +20,7 @@ import necesse.engine.gameLoop.tickManager.TickManager;
 import necesse.engine.commands.ChatCommand;
 import necesseheadlessharness.HeadlessPlayer;
 import necesseheadlessharness.Harness;
+import necesseheadlessharness.Unloading;
 import necesseheadlessharness.Ticks;
 import necesseheadlessharness.ManualTicks;
 import necesseheadlessharness.ServerThreadTasks;
@@ -52,7 +53,10 @@ import necesse.inventory.container.ContainerAction;
 import necesse.inventory.container.ContainerActionResult;
 import necesse.inventory.container.slots.ContainerSlot;
 import necesse.level.gameObject.GameObject;
+import necesse.engine.util.LevelIdentifier;
 import necesse.level.maps.Level;
+import necesse.level.maps.regionSystem.Region;
+import necesse.level.maps.regionSystem.RegionManager;
 import necesse.level.maps.regionSystem.RegionManager;
 
 /**
@@ -226,6 +230,12 @@ public class HarnessCommand extends ChatCommand {
                return this.ticksMode(args, logs);
             case "tick":
                return this.grantTicks(server, args, logs);
+            case "unload":
+               return this.unload(level, spawn, server, args, logs);
+            case "load":
+               return this.load(level, spawn, server, args, logs);
+            case "autounload":
+               return this.autoUnload(args, logs);
             default:
                TestVerb verb = Harness.verb(sub);
                if (verb == null) {
@@ -981,6 +991,146 @@ public class HarnessCommand extends ChatCommand {
    }
 
    /**
+    * {@code unload region <dx> <dy>} — drop the region holding a tile, saving it, as the engine's sweep would.
+    * {@code unload level <identifier>} — drop a level, saving it first.
+    *
+    * <p>Exists because the sweeps run on a thirty-second timer and a suite runs in milliseconds, so without this
+    * the entire class of bug around absent object entities is unobservable. See {@link Unloading}.
+    */
+   private boolean unload(Level level, Point spawn, Server server, ArrayList<String> args, CommandLog logs) {
+      if (args.size() < 2) {
+         logs.add("FAIL unload wants 'region <dx> <dy>' or 'level <identifier>'");
+         return false;
+      }
+
+      String subject = args.get(1).toLowerCase();
+      if ("region".equals(subject)) {
+         if (args.size() < 4) {
+            logs.add("FAIL unload region wants <dx> <dy>");
+            return false;
+         }
+
+         int x = spawn.x + Integer.parseInt(args.get(2));
+         int y = spawn.y + Integer.parseInt(args.get(3));
+         if (!Unloading.unloadRegionAt(server, level, x, y)) {
+            logs.add("FAIL no region loaded at " + args.get(2) + "," + args.get(3) + " to unload");
+            return false;
+         }
+
+         // Reported from inside the same command, because whether it is still gone by the next one is a
+         // different question with a different answer, and confusing the two is expensive.
+         if (replyData != null) {
+            replyData.bool("loaded", Unloading.isTileLoaded(level, x, y))
+               .num("regionx", level.regionManager.getRegionCoordByTile(x))
+               .num("regiony", level.regionManager.getRegionCoordByTile(y))
+               .num("tilex", x)
+               .num("tiley", y);
+         }
+
+         logs.add("PASS unloaded the region at " + args.get(2) + "," + args.get(3));
+         return true;
+      }
+
+      if ("level".equals(subject)) {
+         if (args.size() < 3) {
+            logs.add("FAIL unload level wants an identifier");
+            return false;
+         }
+
+         Level target = server.world.levelManager.getLevel(new LevelIdentifier(args.get(2)));
+         if (target == null) {
+            logs.add("FAIL level '" + args.get(2) + "' is not loaded");
+            return false;
+         }
+
+         if (!Unloading.unloadLevel(server, target)) {
+            logs.add("FAIL level '" + args.get(2) + "' has a player on it, so unloading it would be undone next tick");
+            return false;
+         }
+
+         logs.add("PASS unloaded level " + args.get(2));
+         return true;
+      }
+
+      logs.add("FAIL unload wants 'region' or 'level', got '" + args.get(1) + "'");
+      return false;
+   }
+
+   /**
+    * {@code load region <dx> <dy>} — load the region holding a tile, synchronously.
+    * {@code load level <identifier>} — load a level, generating it if it has never existed.
+    *
+    * <p>Mostly a setup and teardown tool: the engine loads both of these on demand anyway, so a test rarely needs
+    * to ask. Where it earns its place is putting the world back into a known state after {@code unload}, without
+    * depending on the thing under test to do the loading.
+    */
+   private boolean load(Level level, Point spawn, Server server, ArrayList<String> args, CommandLog logs) {
+      if (args.size() < 2) {
+         logs.add("FAIL load wants 'region <dx> <dy>' or 'level <identifier>'");
+         return false;
+      }
+
+      String subject = args.get(1).toLowerCase();
+      if ("region".equals(subject)) {
+         if (args.size() < 4) {
+            logs.add("FAIL load region wants <dx> <dy>");
+            return false;
+         }
+
+         int x = spawn.x + Integer.parseInt(args.get(2));
+         int y = spawn.y + Integer.parseInt(args.get(3));
+         if (!Unloading.loadRegionAt(level, x, y)) {
+            logs.add("FAIL " + args.get(2) + "," + args.get(3) + " is outside the level, so it has no region");
+            return false;
+         }
+
+         logs.add("PASS loaded the region at " + args.get(2) + "," + args.get(3));
+         return true;
+      }
+
+      if ("level".equals(subject)) {
+         if (args.size() < 3) {
+            logs.add("FAIL load level wants an identifier");
+            return false;
+         }
+
+         Level target = server.world.getLevel(new LevelIdentifier(args.get(2)));
+         logs.add(target == null ? "FAIL level '" + args.get(2) + "' could not be loaded"
+            : "PASS loaded level " + args.get(2));
+         return target != null;
+      }
+
+      logs.add("FAIL load wants 'region' or 'level', got '" + args.get(1) + "'");
+      return false;
+   }
+
+   /**
+    * {@code autounload on|off} — the engine's two unload sweeps, or neither. No argument reports the state.
+    *
+    * <p>Off is for tests that grant hundreds of ticks: in manual mode the sweep's thirty-one seconds pass in no
+    * wall-clock time at all, so a long test can have its world dismantled for reasons unrelated to what it is
+    * testing. On is the engine's own behaviour and the default, because a test that opts out of reality should
+    * have to say so.
+    */
+   private boolean autoUnload(ArrayList<String> args, CommandLog logs) {
+      if (args.size() < 2) {
+         logs.add("PASS autounload " + (Unloading.isAutomatic() ? "on" : "off")
+            + ", cooldown " + Unloading.cooldownSeconds() + "s");
+         return true;
+      }
+
+      String mode = args.get(1).toLowerCase();
+      if (!"on".equals(mode) && !"off".equals(mode)) {
+         logs.add("FAIL autounload wants 'on' or 'off', got '" + args.get(1) + "'");
+         return false;
+      }
+
+      Unloading.setAutomatic("on".equals(mode));
+      logs.add("PASS autounload " + mode);
+      return true;
+   }
+
+   /**
     * The harness's own verbs, in one place.
     *
     * <p>They are still a {@code switch} rather than registered {@link TestVerb}s, which is a real
@@ -991,12 +1141,14 @@ public class HarnessCommand extends ChatCommand {
     */
    private static final List<String> BUILT_IN_VERBS = Arrays.asList(
       "place", "fill", "clear", "break", "give", "open", "close", "click", "craft", "quickstack",
-      "restock", "expect", "query", "player", "run", "timescale", "ticks", "tick", "echo", "hello", "rpc");
+      "restock", "expect", "query", "player", "run", "timescale", "ticks", "tick", "unload", "load",
+      "autounload", "echo", "hello", "rpc");
 
    /** Kinds {@code expect} and {@code query} both understand without a consumer mod. */
    // 'category' and 'categories' answer about the item registry rather than about the level, so they
    // are queries with no expect counterpart -- there is nothing to assert, only something to read.
-   private static final List<String> BUILT_IN_KINDS = Arrays.asList("item", "total", "held", "category", "categories", "tick");
+   private static final List<String> BUILT_IN_KINDS =
+      Arrays.asList("item", "total", "held", "category", "categories", "tick", "region", "level");
 
    /**
     * Structured fields for the reply currently being assembled, or null when a verb was invoked by
@@ -1138,6 +1290,39 @@ public class HarnessCommand extends ChatCommand {
          // client's job: a verb that slept until the count advanced would be a server-thread task waiting
          // for the server thread.
          data.num("tick", Ticks.count());
+      } else if ("region".equals(kind)) {
+         // Whether a tile's region is in memory, and how close it is to being dropped. The region coordinates are
+         // reported because a test that wants to unload something the player is not standing in has to know when
+         // an offset actually crosses a boundary -- a region is 16 tiles, so nearby offsets share one and
+         // unloading it would take the player's own ground with it.
+         int x = spawn.x + Integer.parseInt(args.get(2));
+         int y = spawn.y + Integer.parseInt(args.get(3));
+         Region region = Unloading.loadedRegionAt(level, x, y);
+         data.bool("loaded", Unloading.isTileLoaded(level, x, y))
+            .num("regionx", level.regionManager.getRegionCoordByTile(x))
+            .num("regiony", level.regionManager.getRegionCoordByTile(y))
+            .num("playerregionx", level.regionManager.getRegionCoordByTile(spawn.x))
+            .num("playerregiony", level.regionManager.getRegionCoordByTile(spawn.y))
+            .num("size", RegionManager.REGION_SIZE)
+            .num("buffer", region == null ? -1 : region.unloadRegionBuffer.getBuffer())
+            .num("unloadsat", (Unloading.cooldownSeconds() + 1) * 20)
+            .bool("autounload", Unloading.isAutomatic())
+            // Why an unload would not stick, which is otherwise invisible and cost a probe out to 640 tiles.
+            .bool("claimed", Unloading.claimedByAClient(server, level, x, y));
+      } else if ("level".equals(kind)) {
+         data.str("identifier", level.getIdentifier().toString())
+            .num("tilewidth", level.tileWidth)
+            .num("tileheight", level.tileHeight)
+            // Absolute spawn, so a caller can work out an offset that is far from the player and still inside
+            // the level. Every other verb speaks in offsets from here, and a test that wants a distant region
+            // otherwise has to guess how much room it has.
+            .num("spawnx", spawn.x)
+            .num("spawny", spawn.y)
+            .num("unloadbuffer", level.unloadLevelBuffer)
+            .num("loadedregions", level.regionManager.getLoadedRegionsSize())
+            .bool("oneworldlevel", level.isOneWorldLevel())
+            .num("unloadsat", 20 * Math.max(2, Unloading.cooldownSeconds()))
+            .bool("autounload", Unloading.isAutomatic());
       } else if ("total".equals(kind)) {
          data.str("item", args.get(2)).num("count", this.totalOf(level, args.get(2)));
       } else if ("held".equals(kind)) {
@@ -1330,6 +1515,20 @@ public class HarnessCommand extends ChatCommand {
       if ("clear".equals(sub)) {
          int radius = args.size() > 1 ? Integer.parseInt(args.get(1)) : 0;
          this.loadRegionsAround(level, spawn.x - radius, spawn.y - radius, spawn.x + radius, spawn.y + radius);
+         return;
+      }
+
+      // Asking whether a region is loaded must not load it, which is the one exception to the rule above and
+      // took an embarrassing amount of black-box probing to find: 'query region' inherits query's coordinate
+      // position, so the observation was creating what it was there to observe, and an unload that had worked
+      // perfectly read as though it had been undone between commands.
+      //
+      // Worth recording for what it says about coverage rather than about this method. Every harness command
+      // that names a tile has always loaded that tile's region first, deliberately -- so no test built on the
+      // harness could ever have observed a mod reaching into an absent region. The first consumer's wireless
+      // terminal shipped exactly that bug, and this is the mechanism that hid it.
+      if ("query".equals(sub) && args.size() > 1
+            && ("region".equals(args.get(1).toLowerCase()) || "level".equals(args.get(1).toLowerCase()))) {
          return;
       }
 

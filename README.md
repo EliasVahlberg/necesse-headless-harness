@@ -27,6 +27,17 @@ waits for twenty. The level watched is the one the harness's player is on.
 
 ### Game time is detached from the wall clock by default
 
+**Loading is controllable too, and for the same reason.** Necesse drops what nobody is near -- a level after
+thirty seconds, and every region on its own schedule -- and **object entities live in regions**, so a chest can be
+absent from memory while its level is fully loaded. A suite that finishes in milliseconds never reaches either
+timer, so it never sees the mod's behaviour when a tile it wants is not there. `unload region` and `load region`
+make that reachable; `autounload off` stops the sweep perturbing a test that grants hundreds of ticks.
+
+Two things about this are worth knowing before writing such a test. Every command that names a tile
+**deliberately loads that tile's region first**, which is why the case was invisible until now -- `query region`
+is exempt precisely so that asking does not change the answer. And the player reloads the ground around
+themselves, so an unload only sticks at a distance: `distant_offset()` gives one.
+
 Ticks are **granted**, not waited for. `ticks manual` stops the server's game tick, and `tick N` runs exactly
 N of them on demand. On the first consumer's 163 tests this took the suite from **333 seconds to 20**.
 
@@ -193,6 +204,10 @@ Generic, because they can be said without knowing your mod:
 | `ticks manual [fps]\|auto` | detach game time from the clock, or reattach it; reports the mode with no argument |
 | `tick [n]` | run n game ticks now. Manual mode only, so that a test cannot get its ticks *plus* the clock's |
 | `timescale [x]` | the game's own fast-forward, for use with `--clock-ticks`. Ignored under manual ticks |
+| `unload region <dx> <dy>` | drop a tile's region now, saving it, as the engine's own sweep would |
+| `unload level <identifier>` | drop a level, saving it first. Refused for a level a player is on |
+| `load region <dx> <dy>` \| `load level <id>` | put either back, synchronously |
+| `autounload on\|off` | the engine's unload sweeps, or neither. Reports the state with no argument |
 | `query tick` | how much game time has passed on the watched level |
 | `run <name>` / `echo <text>` | compose and annotate |
 
