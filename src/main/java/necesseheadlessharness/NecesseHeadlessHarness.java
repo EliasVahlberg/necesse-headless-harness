@@ -55,6 +55,7 @@ public class NecesseHeadlessHarness {
       }
 
       CommandsManager.registerServerCommand(new HarnessCommand());
+      ModBridges.loadAll();
       keepTheSyntheticClientAlive();
    }
 

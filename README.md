@@ -228,27 +228,55 @@ counts one tile's inventory, which is right for a chest and wrong for anything t
 across containers — so a mod must be able to redefine the word rather than invent a second one
 meaning the same thing.
 
-**Your harness-facing classes must not be in your released jar.** This is the one thing to get
-right, and a `try/catch` will not save you.
+**Your harness-facing classes cannot ship as classes — but they can ship.** This is the one thing to
+get right, and a `try/catch` will not save you.
 
-`LoadedMod.loadClasses` defines **every** class in a mod jar as the mod loads, and turns a
-`LinkageError` or `ClassNotFoundException` into a fatal `ModLoadException`. So a single class
-referencing a harness type is enough to make your mod refuse to load for anyone who has not
-installed the harness -- and it fails during mod loading, before any of your code runs, so there is
-no call site left to guard. The symptom misleads too: the loader then dies with a
-`NullPointerException` about a null dispose method.
+`LoadedMod.loadClasses` calls `loadClass` on **every** `.class` entry in a mod jar as the mod loads,
+and defining a class resolves its superclass and interfaces. So a class implementing `TestVerb` is
+enough to make your mod refuse to load for anyone without the harness -- during mod loading, before
+any of your code runs, so there is no call site left to guard. The symptom misleads too: the loader
+then dies with a `NullPointerException` about a null dispose method.
 
-The fix is that test code should not ship anyway. Build two jars:
+Note how narrow the rule is, because it decides the fix. **Only supertypes are eager.** A harness
+type named inside a method body, in a method signature, or as a lambda's target interface resolves
+lazily and costs nothing until that code runs.
+
+So ship the bridge as resources rather than as code, and let the harness define it:
 
 ```groovy
-tasks.named('buildModJar') { exclude "yourmod/harness/**" }   // released
-tasks.register('buildTestModJar', Jar) { ... }                // build/testjar, includes them
+tasks.named('buildModJar') {
+    from(sourceSets.main.java.classesDirectory) { exclude "yourmod/harness/**" }
+    from(sourceSets.main.java.classesDirectory) {
+        include "yourmod/harness/**"
+        into "harnessbridge"
+        rename { String name -> name + "data" }      // X.class -> X.classdata
+    }
+}
 ```
 
-and point `MOD_UNDER_TEST` at the test one. `optionalDependencies` in `mod.info` is still worth
-declaring, so load order is right when the harness *is* present, and a `try/catch (Throwable)`
-around your own registration call is still worth having -- with the classes excluded that is the
-path actually taken, and `NoClassDefFoundError` is an `Error` which `catch (Exception)` misses.
+plus `harnessbridge/bridge.txt` at the jar root naming one entry class per line, each with a
+`public static void register()`. `.classdata` is the point: the loader's only test for what is code
+is the `.class` suffix, so these are opaque resources to the game. `ModBridges` reads them back and
+defines them in a parent-first class loader, but only when the harness is actually running -- so a
+player's game never defines them at all.
+
+What that buys you, beyond one jar instead of two: **your tests exercise the artifact you ship**,
+including this path, and a player can install the harness on the world that is misbehaving and send
+you real data. Point `MOD_UNDER_TEST` at your normal jar.
+
+Two things you no longer need, and one you cannot do. No `optionalDependencies` in `mod.info` --
+discovery runs from the harness's own `postInit`, after the engine has run every mod's `init`, so
+there is no load order to arrange, and an unmet optional dependency would draw your mod's name in
+warning colour on every player's mod list. No `try/catch` around a registration call, because you no
+longer make one. And a deferred class **cannot be a ByteBuddy patch class**: patches are applied
+while mods load, which is long over by the time a bridge is defined.
+
+Worth guarding with a test rather than a habit, since neither failure is visible on a machine with
+the harness installed. `arcane-storage` does it in
+`src/test/java/arcanestorage/release/JarLoadsWithoutHarnessTest.java`: load every `.class` in the
+built jar through a `URLClassLoader` whose parent is the *platform* loader, with the game's jar but
+not the harness on the class path, and read each class's annotations. That reproduces what the mod
+loader does, and it fails if anything inherits a harness type.
 
 Verified both ways, by booting a dedicated server with the harness removed from the mods folder:
 shipping the classes is fatal, excluding them loads cleanly and logs one line saying the verbs were

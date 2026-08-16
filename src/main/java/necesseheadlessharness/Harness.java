@@ -15,18 +15,22 @@ import necesseheadlessharness.command.TestVerb;
  * after {@code init()} and throw afterwards, whereas a test verb has no wire format, no ID space
  * and nothing to synchronise, so there is no reason to make it that strict.
  *
- * <p><strong>The soft-dependency trap, and the advice that does not work.</strong> An earlier
- * version of this javadoc said to isolate your registration in one class and call it from a
- * try/catch. That is wrong. {@code LoadedMod.loadClasses} defines every class in a mod jar as the
- * mod loads and turns a {@code LinkageError} into a fatal {@code ModLoadException}, so one class
- * referencing these types stops your mod loading at all for anyone without the harness -- before
- * any of your code runs, leaving no call site to guard.
+ * <p><strong>The soft-dependency trap, and how the harness now handles it for you.</strong> A class that implements
+ * {@link TestVerb} cannot sit in a released mod jar. {@code LoadedMod.loadClasses} defines every {@code .class} entry
+ * as the mod loads, defining a class resolves its superclass and interfaces, and with the harness absent that becomes
+ * a fatal {@code ModLoadException} -- so the mod refuses to load for every player, before any of its own code runs and
+ * with no call site left to guard. An earlier version of this javadoc concluded from that you should keep such classes
+ * out of your jar and build a second one for testing. That works, but it means the jar your tests exercise is not the
+ * jar anyone runs.
  *
- * <p>Keep your harness-facing classes out of your released jar instead; test code should not ship
- * anyway. Exclude the package from your normal jar and build a second one for testing. A
- * try/catch around your registration call is still worth having, because with the classes excluded
- * that is the path actually taken. Verified by booting a dedicated server with the harness removed
- * from the mods folder.
+ * <p>Only <em>supertypes</em> are eager, though. Ship your bridge classes renamed to {@code .classdata} under
+ * {@code harnessbridge/} and the mod loader never treats them as classes at all; {@link ModBridges} defines them when
+ * the harness is running and calls your {@code register()}. One jar, tested as shipped, and a player can install the
+ * harness on the world that is misbehaving. See {@link ModBridges} for what to ship and the one thing a bridge may not
+ * contain.
+ *
+ * <p>Nothing else is required of you: no dependency declaration, and no load-order relationship, because discovery
+ * runs from the harness's own {@code postInit}, by which point the engine has run every mod's {@code init}.
  */
 public final class Harness {
 
