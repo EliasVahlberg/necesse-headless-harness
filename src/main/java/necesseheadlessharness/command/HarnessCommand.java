@@ -619,7 +619,7 @@ public class HarnessCommand extends ChatCommand {
 
       String itemID = args.get(1);
       int amount = Integer.parseInt(args.get(2));
-      boolean added = serverClient.playerMob.getInv().addItem(new InventoryItem(itemID, amount), true, "harness");
+      boolean added = serverClient.playerMob.getInv().addItem(new InventoryItem(itemID, amount), true, "harness", null);
       return this.check(logs, added, "gave " + amount + " " + itemID, "inventory would not take them");
    }
 

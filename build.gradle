@@ -8,7 +8,7 @@ plugins {
 project.ext.modID = "elias.necesseheadlessharness" // The unique id of your mod. Must be all lowercase and cannot use special characters.
 project.ext.modName = "Necesse Headless Harness" // The display name of your mod.
 project.ext.modVersion = "0.1.0" // Your current builds version. Must follow the xx.xx... format.
-project.ext.gameVersion = "1.3.2" // The target game version.
+project.ext.gameVersion = "1.3.3" // The target game version.
 project.ext.modDescription = "A headless integration test harness for Necesse mods. Drives a real dedicated server from scenario files, including a socketless player, so container and world behaviour can be asserted without a person playing the game." // Short description of what your mod is.
 project.ext.author = "Elias Vahlberg" // Your name
 

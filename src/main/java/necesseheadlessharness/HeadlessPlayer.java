@@ -47,7 +47,7 @@ public final class HeadlessPlayer {
 
    /** The synthetic client, or null if none has been spawned. */
    public static ServerClient current() {
-      return client != null && client.isServerClient() ? client : null;
+      return client != null && client.isServer() ? client : null;
    }
 
    public static ServerClient spawn(Server server, Level level, CommandLog logs) {
