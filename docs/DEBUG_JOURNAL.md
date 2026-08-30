@@ -358,7 +358,51 @@ hold yet for anything driven by frames or the world clock.
 
 ---
 
-## 2026-08-30 — Manual ticks put into real lockstep, in three patches
+## 2026-08-30 — Two suites at once corrupted each other, and a failed launch was enough
+
+**Found by accident, which is the point.** An arcane-production suite was started by hand while an
+arcane-storage run was in progress. The arcane-storage run collapsed — `1 failed, 4 passed, 269 errors` — and
+the only visible symptom was `java.net.BindException: Address already in use` in the *new* server's log. The
+obvious reading is "second server could not start, second run fails". That reading is wrong and it hid a real
+defect.
+
+**The mechanism.** Every project used the same default work directory, so every project used the same
+`replies.jsonl`, and each fresh boot truncated it. Starting a second suite therefore truncated the first
+suite's reply file **while the first run's reader was positioned in it** — the reader's offset was now past
+end of file, so replies it was waiting for no longer existed and `ServerDied` was reported against a server
+that was perfectly healthy.
+
+**The part worth remembering: the damage does not need the second server to start.** Truncation happens in
+Python during launch preparation, before the JVM is spawned and long before it tries to bind. So the second
+run failing outright with `BindException` still destroyed the first run. A failed launch was a sufficient
+cause, which is exactly why the symptom pointed at the wrong process.
+
+**Fixed by removing the sharing rather than serialising access.** Reply files are now per run
+(`replies-<runid>.jsonl`), so nothing needs truncating and a stale reply cannot be read by a run that did not
+write it. Work directories are now per world, so projects no longer share a log directory or a pruning
+budget.
+
+**A misdiagnosis this also caused, recorded because it was mine.** With both projects writing to one log
+directory, "the newest log" was ambiguous. While diagnosing the above I read
+`server-20260830-151120-253517-1.log` as belonging to my run; the pid in the name was arcane-production's. Two
+projects in one directory makes the most convenient diagnostic habit — look at the newest file — silently
+wrong.
+
+**Also corrected here: a wedge that was not one.** The concurrent server was read as deadlocked from
+`futex_do_wait` plus a log that had stopped growing. A thread dump said otherwise: the Server Thread was
+`TIMED_WAITING` in `TickManager.tickLogic`'s pacing sleep, the light-update executor was parked waiting for
+work, and jcmd reported no Java-level deadlock. It was an idle, healthy server waiting for commands while its
+driver sat in a real-time wait. `futex_do_wait` on the process is not evidence of a deadlock; the thread dump
+is, and it is cheap.
+
+**Still unfixed, and now the known limit on concurrency.** The game server's listen port is fixed, so two
+suites still cannot boot at once — the second gets `BindException`. That is now a clean, loud failure rather
+than silent cross-run corruption, which is the right shape for an unsupported case, but it is a limitation
+worth lifting: the harness drives the server over stdin and never uses that socket, so the port is incidental
+to everything the harness does.
+
+---
+
 
 The gap this closes: manual mode gated `Server.tick` and **nothing else**, so three clocks ran free. Fixed in
 the order of how much variance each removed, each verified by re-running `probe_clocks.py`.

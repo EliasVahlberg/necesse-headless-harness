@@ -115,8 +115,15 @@ class ServerConfig:
         # Deliberately not /tmp, which is where this used to point. A flaky suite is diagnosed from the
         # log of the run that failed, and on this machine /tmp is cleared often enough that the evidence
         # for an intermittent failure was routinely gone before anyone went looking for it.
+        #
+        # Per world, so two projects do not share a directory. They did, and it cost a misdiagnosis: with
+        # an arcane-production suite running alongside an arcane-storage one, "the newest log" was the
+        # other project's, and log pruning counted both projects' boots against one budget. A world name
+        # identifies the project as well as anything available here and stays stable across runs, which a
+        # pid would not.
         default = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "necesse-harness"
-        return self.work_dir or Path(os.environ.get("HARNESS_OUT", default))
+        base = self.work_dir or Path(os.environ.get("HARNESS_OUT", default))
+        return base / self.world
 
 
 class HarnessServer:
@@ -212,7 +219,21 @@ class HarnessServer:
 
         out = self.config.resolved_work_dir()
         out.mkdir(parents=True, exist_ok=True)
-        self.rpc_path = out / "replies.jsonl"
+
+        # One reply file per run, named after the run rather than shared.
+        #
+        # It used to be a single 'replies.jsonl' under a work directory shared by every project on the
+        # machine, truncated on each fresh boot. Two suites running at once therefore fought over one file:
+        # the second one's start truncated the first one's replies *while its reader was positioned in the
+        # file*, so the first run waited forever for an answer that had been deleted. Worse, the truncation
+        # happens here, before the JVM tries to bind its port -- so a second launch that fails outright with
+        # "Address already in use" still corrupts the run that was already going. Observed exactly that way:
+        # an arcane-production suite starting mid-run took an arcane-storage suite down with it, and the
+        # BindException in the *new* log was the only visible symptom.
+        #
+        # A per-run name removes the whole class of problem rather than narrowing it. Nothing is shared, so
+        # nothing needs truncating, and a stale reply cannot be read by a run that did not write it.
+        self.rpc_path = out / f"replies-{self._run_id}.jsonl"
 
         # A log per boot, rather than one file rotated once.
         #
@@ -240,11 +261,12 @@ class HarnessServer:
             # A symlink is a convenience, never a requirement.
             pass
 
-        # The reply file is truncated rather than rotated: a stale reply would answer this run's
-        # first request with the last run's answer, which is a bug nobody would believe. On a restart
-        # it must survive instead, because the reader is already positioned in it.
+        # The reply file belongs to this run alone, so there is nothing stale to clear -- but it is created
+        # empty on the first boot because the reader opens it and expects to find it. On a restart it must
+        # survive untouched, since the reader is already positioned in it.
         if fresh:
             self.rpc_path.write_text("")
+            self._prune_replies(out)
 
         if fresh:
             world_file = self.config.appdata / "saves/worlds" / f"{self.config.world}.zip"
@@ -288,6 +310,26 @@ class HarnessServer:
             return
 
         for stale in existing[: max(0, len(existing) - self.config.keep_logs)]:
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+
+    def _prune_replies(self, out: Path) -> None:
+        """Keeps reply files bounded, since each run now leaves its own behind.
+
+        Deliberately never touches the file this run owns, and tolerates another run's file disappearing
+        underneath it: two suites may legitimately be pruning the same directory at the same time.
+        """
+        try:
+            existing = sorted(out.glob("replies-*.jsonl"), key=lambda p: p.stat().st_mtime)
+        except OSError:
+            return
+
+        keep = max(1, self.config.keep_logs)
+        for stale in existing[: max(0, len(existing) - keep)]:
+            if stale == self.rpc_path:
+                continue
             try:
                 stale.unlink()
             except OSError:
