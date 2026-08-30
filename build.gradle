@@ -118,7 +118,7 @@ tasks.register('preAntialiasTextures', JavaExec) {
 
     classpath = files(gameDirectory + "/Necesse.jar")
 
-    main "PreAntialiasTextures"
+    mainClass.set("PreAntialiasTextures")
     args "-folders", "${sourceSets.main.resources.srcDirs.stream().map { file -> file.path }.toArray().join(";")}"
 }
 
