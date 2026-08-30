@@ -358,7 +358,55 @@ hold yet for anything driven by frames or the world clock.
 
 ---
 
-## 2026-08-30 — Two suites at once corrupted each other, and a failed launch was enough
+## 2026-08-30 — Every run tests a different world, which no amount of clock work fixes
+
+**The claim of determinism made earlier today does not hold, and this is the likeliest reason.** Three
+consecutive runs of one unchanged tree produced `274 passed, 1 xfailed`, then `3 failed, 271 passed, 1 xfailed`,
+then `274 passed, 1 xpassed`. The five identical runs recorded above were weak evidence presented as strong.
+
+**The world is regenerated per run, with a different spawn island every time.** Read straight off the bus tile
+in each run's own log:
+
+| Run | bus tile at spawn+(3,1) |
+|---|---|
+| 154202 | 683,473 |
+| 154303 | -1045,9 |
+| 154757 | 875,1017 |
+| 154849 | 795,1033 |
+| 154940 | -309,-1079 |
+| 155034 | -693,-839 |
+
+Within a run, boots 1 and 3 agree — the world correctly survives a restart. Across runs nothing agrees. The
+harness passes no seed and deletes the world archive on a fresh start, so each run generates a new one.
+
+**Terrain generation is not the random part.** `WorldGenerator.islandSeed(islandX, islandY)` is
+`new GameRandom(islandX * 1289969L + islandY * 888161L).nextLong()`, and `WorldSettings` has no seed field at
+all -- so a given island position always generates identically. What varies is *which island the spawn lands
+on*. That is good news: the randomness has one entry point rather than being diffused through generation.
+
+**Why this outranks the ungated executors as a suspect.** Tests place devices at spawn-relative offsets on
+whatever terrain is there, and a different island means different tiles under `spawn+(3,0)`, a different biome,
+and a different set of nearby mobs -- which then feed the one scheduler still not gated by the tick budget.
+Exact tick counts on a non-identical world is not reproducibility.
+
+**Method note, recorded because it wasted a step.** Differencing only the `FAIL` lines between a failing and a
+passing run showed one apparent difference, and it was an artifact: the normalising regex `[0-9]+,[0-9]+` does
+not match negative coordinates, so `683,473` and `-1045,9` were treated as different messages. The full
+normalised logs differ by hundreds to thousands of lines per boot, which is the honest signal, and the
+`busapply` refusal that looked like a lead is deliberate -- `test_the_reason_names_the_other_device` asserts it
+via `pytest.raises`.
+
+**Also a gap in the trail: pytest's own output is the one artifact not kept.** The four server boots are saved
+per run, but `pytest-all` runs bare, so the names of the three failing tests existed only in a terminal. One
+was captured before it scrolled away, `test_multitile_containers::test_a_bus_finds_a_wide_container_from_either_half`;
+the other two are unrecoverable. The expensive artifact is retained and the cheap decisive one is discarded.
+
+**Not yet attempted:** pinning the spawn island so a fresh world regenerates identically, which would give both
+clean state and stable terrain. The alternative -- keeping one world and resetting state -- risks tests
+contaminating each other, which is presumably why the archive is deleted in the first place.
+
+---
+
 
 **Found by accident, which is the point.** An arcane-production suite was started by hand while an
 arcane-storage run was in progress. The arcane-storage run collapsed — `1 failed, 4 passed, 269 errors` — and
