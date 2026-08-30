@@ -74,7 +74,9 @@ def harness_server(harness_config, request) -> HarnessServer:
     try:
         yield server
     finally:
-        server.stop()
+        # Not a clean stop on purpose. The engine would spend ~2s writing the world and then wait out its
+        # own 2s exit timer, to persist a world the next fresh start deletes before generating a new one.
+        server.stop(save=harness_config.save_on_stop)
 
 
 @pytest.fixture(scope="session")

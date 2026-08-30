@@ -75,6 +75,21 @@ class ServerConfig:
     #: Only takes effect when a world is generated. An existing archive keeps the seed it was made with.
     world_seed: str = field(default_factory=lambda: os.environ.get("HARNESS_WORLD_SEED", "harness"))
 
+    #: Whether the session's final stop lets the engine save the world on the way down.
+    #:
+    #: Off, because that save is pointless and slow: the engine spends about two seconds writing the world
+    #: and then waits out its own "Exiting in 2 seconds..." timer, to persist a world the next fresh start
+    #: deletes before generating a new one. Skipping it took arcane-production's session teardown from 5.9s
+    #: to under a tenth of that, which halved its fast tier -- worth having, since the tests in that tier
+    #: cost about a second between them and all the rest was boot and shutdown.
+    #:
+    #: ``restart`` is unaffected and always saves; a restart exists to prove something survives a save and a
+    #: load, so it could not do otherwise.
+    #:
+    #: Turn it on to inspect a world after a run. The archive may otherwise be left mid-write, which is
+    #: harmless only because a fresh start deletes it.
+    save_on_stop: bool = False
+
     #: Seconds to wait for the world to generate and the server to report itself started.
     boot_timeout: float = 120.0
 
@@ -370,7 +385,8 @@ class HarnessServer:
 
             time.sleep(0.25)
 
-        self.stop()
+        # No save: this world never started properly, and the caller is about to raise.
+        self.stop(save=False)
         raise ServerDied(
             f"the server did not report {READY_LINE!r} within {self.config.boot_timeout}s:\n"
             + self.log_tail())
@@ -392,20 +408,43 @@ class HarnessServer:
         self.stop()
         self.start(fresh=False)
 
-    def stop(self) -> None:
+    def stop(self, save: bool = True) -> None:
+        """Stops the server, optionally without letting it save on the way down.
+
+        ``save=True`` is the clean path: the console ``stop`` command makes the engine write the world and
+        shut down in order, which is what :meth:`restart` needs, because a restart exists precisely to prove
+        something survived a save and a load.
+
+        ``save=False`` exists because that path is expensive and, at the end of a session, pointless. The
+        engine spends about two seconds writing the world, then announces "Exiting in 2 seconds..." and waits
+        out its own timer -- roughly four seconds to persist a world the very next run deletes before it
+        generates a new one. Signalling the process instead skips both. Measured on arcane-production's suite:
+        session teardown fell from 5.9s to under a tenth of that, which halved the fast tier's total runtime
+        because the tests themselves only cost about a second.
+
+        The world archive may be left mid-write by this, and that is safe for exactly one reason: a fresh
+        start deletes it. Anything wanting to inspect a world after a run must stop with ``save=True``.
+        """
         if self.process is None:
             return
 
         if self.process.poll() is None:
-            try:
-                self.send_line("stop")
-            except Exception:
-                pass
+            if save:
+                try:
+                    self.send_line("stop")
+                except Exception:
+                    pass
 
-            try:
-                # Bounded, because a deadlocked server never answers 'stop' and would hang here.
-                self.process.wait(timeout=45)
-            except subprocess.TimeoutExpired:
+                try:
+                    # Bounded, because a deadlocked server never answers 'stop' and would hang here.
+                    self.process.wait(timeout=45)
+                except subprocess.TimeoutExpired:
+                    self.process.terminate()
+                    try:
+                        self.process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        self.process.kill()
+            else:
                 self.process.terminate()
                 try:
                     self.process.wait(timeout=10)
