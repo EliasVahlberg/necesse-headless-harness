@@ -401,9 +401,30 @@ per run, but `pytest-all` runs bare, so the names of the three failing tests exi
 was captured before it scrolled away, `test_multitile_containers::test_a_bus_finds_a_wide_container_from_either_half`;
 the other two are unrecoverable. The expensive artifact is retained and the cheap decisive one is discarded.
 
-**Not yet attempted:** pinning the spawn island so a fresh world regenerates identically, which would give both
-clean state and stable terrain. The alternative -- keeping one world and resetting state -- risks tests
-contaminating each other, which is presumably why the archive is deleted in the first place.
+**Fixed the same day.** `ServerCreationSettings.worldSeed` defaults to `getNewRandomSpawnSeed()`, five random
+characters from `GameRandom.globalRandom` — nobody asked for randomness, it is the default a player wants when
+starting a new save. `WorldSeedPatch` now pins it, targeting the one-argument
+`getNewRandomSpawnSeed(GameRandom)` because the no-argument form delegates to it, so patching the one-argument
+covers both the field initialiser and any direct caller. The seed arrives as a `-D` system property, not a
+harness verb, because generation happens during boot before the command queue exists — there is no moment at
+which a verb could pin it in time.
+
+Measured: spawn is now `408,1784` on every freshly generated world, in both projects' worlds, where three
+consecutive runs previously gave `680,472`, `-1048,8` and `-696,-840`. With `HARNESS_WORLD_SEED=""` the seed is
+left alone and two runs gave `968,-8` and `984,1816`, so the varied mode is genuinely reachable rather than
+nominal.
+
+`HARNESS_WORLD_SEED` defaults to pinned, and the unpinned mode matters: a pinned seed means the suite only ever
+tests one terrain configuration, so a bug needing water or a cliff edge beside the fixture stops appearing at
+all rather than appearing one run in twenty. Reproducible by default, varied on request, with
+`test_the_world_is_generated_from_a_pinned_seed` skipping itself when unpinned.
+
+**What this does and does not establish.** Three consecutive arcane-storage runs then gave
+`274 passed, 1 xfailed` identically, including the xfail outcome that had flipped to `xpassed` before. That is
+consistent with the fix mattering, and it is *not* proof of determinism — five identical runs were taken as
+proof earlier today and did not survive the sixth. What is solid is narrower and worth more: a specific,
+understood source of run-to-run variance is gone, and its mechanism was read from the engine rather than
+inferred from a pass rate.
 
 ---
 

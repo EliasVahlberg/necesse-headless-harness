@@ -57,6 +57,24 @@ class ServerConfig:
 
     world: str = field(default_factory=lambda: os.environ.get("HARNESS_WORLD", "headless_harness_py"))
 
+    #: The seed to generate the world with. Pinned by default, so a regenerated world is the *same* world.
+    #:
+    #: A fresh session deletes the world archive to keep one run's placed objects out of the next run's way,
+    #: and the engine's ``ServerCreationSettings.worldSeed`` then defaults to five random characters. That made
+    #: every run a different world: the spawn island is fixed, but ``SpawnTileFinder`` searches the generated
+    #: terrain for somewhere valid to stand, so spawn moved to 680,472, then -1048,8, then -696,-840 on three
+    #: consecutive runs. Every test addresses tiles as spawn plus an offset, so the whole fixture layout landed
+    #: on new terrain, in a new biome, near a different set of mobs. That is the variance the tick budget cannot
+    #: reach, and it is why five identical runs did not generalise to six.
+    #:
+    #: Set it to the empty string to leave generation random, which is the opt-in for deliberately varying
+    #: terrain. Worth doing on purpose sometimes: a pinned seed means the suite only ever tests one terrain
+    #: configuration, so a bug that needs water or a cliff edge next to the fixture stops appearing at all
+    #: rather than appearing one run in twenty. Reproducible by default, varied when asked for.
+    #:
+    #: Only takes effect when a world is generated. An existing archive keeps the seed it was made with.
+    world_seed: str = field(default_factory=lambda: os.environ.get("HARNESS_WORLD_SEED", "harness"))
+
     #: Seconds to wait for the world to generate and the server to report itself started.
     boot_timeout: float = 120.0
 
@@ -282,6 +300,11 @@ class HarnessServer:
             "-hiddencheats",
             "-world", self.config.world,
         ]
+        # Passed as a property rather than a command because generation happens during boot, before the
+        # command queue exists -- there is no moment at which a verb could pin it in time. Omitted entirely
+        # when blank, so an unset seed leaves the engine's own random default untouched.
+        if self.config.world_seed:
+            command.insert(1, f"-Dnecesseheadlessharness.worldseed={self.config.world_seed}")
         if self.config.mod_under_test:
             command += ["-mod", f"{self.config.mod_under_test}/"]
 

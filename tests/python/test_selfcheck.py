@@ -232,6 +232,32 @@ def test_a_granted_tick_is_worth_exactly_one_tick_of_time(harness):
     assert after["worldtime"] - before["worldtime"] == ticks * 50, "50ms of world time per tick"
 
 
+def test_the_world_is_generated_from_a_pinned_seed(harness):
+    """The same seed must put spawn in the same place, or every run tests a different world.
+
+    This is the variance the tick budget cannot reach. A fresh session deletes the world archive so that one
+    run's placed objects stay out of the next run's way, and the engine then defaults the seed to five random
+    characters. The spawn island is fixed and the nominal spawn tile is always (512,512), but SpawnTileFinder
+    searches the *generated terrain* for somewhere valid to stand -- so a new seed moved spawn to 680,472, then
+    -1048,8, then -696,-840 on three consecutive runs. Every verb addresses tiles as spawn plus an offset, so
+    the whole fixture layout moved to new terrain in a new biome each time.
+
+    Asserting the exact tile is deliberate, and it is allowed to fail for a legitimate reason: a game update
+    that changes world generation will move it. That is worth being told about, because it means recorded
+    coordinates in older notes no longer describe this world. What must not happen quietly is the seed becoming
+    unpinned again, which this catches because a random seed lands somewhere else virtually every time.
+    """
+    if not harness.server.config.world_seed:
+        pytest.skip("seed deliberately unpinned, so terrain is expected to vary")
+
+    level = harness.query("level")
+    assert (level["spawnx"], level["spawny"]) == (408, 1784), (
+        f"seed {harness.server.config.world_seed!r} put spawn at "
+        f"{level['spawnx']},{level['spawny']} rather than the recorded 408,1784 -- either the seed is no "
+        f"longer reaching world generation, or the game's generator changed"
+    )
+
+
 def test_the_clocks_query_separates_the_budget_from_the_wall_clock(harness):
     """Names the distinction in a test, so it cannot quietly stop being reported.
 
