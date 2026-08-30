@@ -21,7 +21,6 @@ session to learn:
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -108,8 +107,16 @@ class ServerConfig:
 
     work_dir: Path | None = None
 
+    #: How many boots' logs to keep before the oldest are pruned. A `pytest-all` run is four boots,
+    #: so this is roughly the last fifteen runs.
+    keep_logs: int = int(os.environ.get("HARNESS_KEEP_LOGS", "60"))
+
     def resolved_work_dir(self) -> Path:
-        return self.work_dir or Path(os.environ.get("HARNESS_OUT", "/tmp/necesse-harness"))
+        # Deliberately not /tmp, which is where this used to point. A flaky suite is diagnosed from the
+        # log of the run that failed, and on this machine /tmp is cleared often enough that the evidence
+        # for an intermittent failure was routinely gone before anyone went looking for it.
+        default = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "necesse-harness"
+        return self.work_dir or Path(os.environ.get("HARNESS_OUT", default))
 
 
 class HarnessServer:
@@ -122,6 +129,10 @@ class HarnessServer:
         self.log_path: Path
         self.rpc_path: Path
         self._boot_time = 0.0
+        # Identifies this session's logs, so the four boots of a pytest-all run group together and do
+        # not collide with a concurrent one.
+        self._run_id = f"{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+        self._boot_seq = 0
 
     # -- guards ---------------------------------------------------------------------------------
 
@@ -201,25 +212,39 @@ class HarnessServer:
 
         out = self.config.resolved_work_dir()
         out.mkdir(parents=True, exist_ok=True)
-        self.log_path = out / "server.log"
         self.rpc_path = out / "replies.jsonl"
 
-        # Keep one previous log. A run failed once here and could not be diagnosed afterwards
-        # because the next run had already overwritten the evidence -- and the log is the only place
-        # the reason exists, since a failure this layer cannot explain is usually explained there.
-        if self.log_path.exists():
-            shutil.copy2(self.log_path, self.log_path.with_suffix(".previous.log"))
+        # A log per boot, rather than one file rotated once.
+        #
+        # Two reasons, both learned from a failure that could not be explained afterwards. A restart is a
+        # boot, so a pytest-all run is *four* servers: keeping only the current log and one previous threw
+        # away half of every run, and the failures being chased occur in the earlier processes as often as
+        # the later ones. And a fresh file per boot is what _await_ready needs anyway -- it looks for the
+        # ready line anywhere in the file, so a leftover one from the previous boot would make a restart
+        # appear instant and every command after it race the server. Rotating by name gets that for free
+        # instead of by truncating, which is what destroyed the evidence.
+        logs = out / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        self._boot_seq += 1
+        self.log_path = logs / f"server-{self._run_id}-{self._boot_seq}.log"
+        self._prune_logs(logs)
+
+        # A stable name for "the log I care about right now", so anything reporting a path can point at
+        # something a human can find twice.
+        latest = out / "server-latest.log"
+        try:
+            if latest.is_symlink() or latest.exists():
+                latest.unlink()
+            latest.symlink_to(self.log_path)
+        except OSError:
+            # A symlink is a convenience, never a requirement.
+            pass
 
         # The reply file is truncated rather than rotated: a stale reply would answer this run's
         # first request with the last run's answer, which is a bug nobody would believe. On a restart
         # it must survive instead, because the reader is already positioned in it.
         if fresh:
             self.rpc_path.write_text("")
-
-        # The log is always truncated, including on a restart, because _await_ready looks for the
-        # ready line anywhere in the file -- a leftover one from the previous boot would make a
-        # restart appear instant and every command after it race the server.
-        self.log_path.write_text("")
 
         if fresh:
             world_file = self.config.appdata / "saves/worlds" / f"{self.config.world}.zip"
@@ -254,6 +279,19 @@ class HarnessServer:
         )
 
         self._await_ready()
+
+    def _prune_logs(self, logs: Path) -> None:
+        """Keeps the newest ``keep_logs`` boot logs, so history is bounded rather than unbounded."""
+        try:
+            existing = sorted(logs.glob("server-*.log"), key=lambda p: p.stat().st_mtime)
+        except OSError:
+            return
+
+        for stale in existing[: max(0, len(existing) - self.config.keep_logs)]:
+            try:
+                stale.unlink()
+            except OSError:
+                pass
 
     def _await_ready(self) -> None:
         deadline = time.time() + self.config.boot_timeout
