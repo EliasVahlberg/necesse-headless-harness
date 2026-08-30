@@ -27,6 +27,11 @@ class Harness:
         self.rpc = RpcChannel(server)
         self._history: list[str] = []
         self.vocabulary: dict = {}
+        # Server-side switches that a fresh JVM resets, remembered so restart() can put them back. None
+        # means "never asked", which is different from "asked for the engine's default" -- only the former
+        # should leave the new process alone. See restart().
+        self._auto_unload: bool | None = None
+        self._autosave: bool | None = None
 
     # -- plumbing -------------------------------------------------------------------------------
 
@@ -189,6 +194,13 @@ class Harness:
         save, to work around a bus network coming back as ``nobus`` after a reload -- that failure was a
         symptom of running the whole session accelerated, and it went away once time stopped running
         between commands at all.
+
+        **The same is true of every other server-side switch, and used to be missed.** Unload suppression
+        and autosave suppression both live in static state inside the JVM, so a restart silently handed
+        every following test the engine's defaults back -- the suite asked for the sweeps off once, at
+        session start, and from the first restart onward they were on again. Nothing announced it. They are
+        re-applied here from what was last requested rather than from the config, so this stays correct
+        whoever set them and whatever they set them to.
         """
         # Auto first, for the same reason close() does it: the stop inside restart saves the world, and
         # saving needs ticks. Frozen, the restart would cost the full kill timeout instead of a clean save,
@@ -197,6 +209,14 @@ class Harness:
             self.set_manual_ticks(False)
 
         self.server.restart()
+
+        # Before the player, so the window where a fresh process is running its own sweeps and saves is as
+        # short as the protocol allows.
+        if self._auto_unload is not None:
+            self.set_auto_unload(self._auto_unload)
+        if self._autosave is not None:
+            self.set_autosave(self._autosave)
+
         self.spawn_player()
         if self.server.config.manual_ticks:
             self.set_manual_ticks(True)
@@ -335,7 +355,23 @@ class Harness:
         pass in no wall-clock time, so a long test can have its world dismantled for reasons unrelated to what it
         is testing. On is the engine's behaviour and the default.
         """
+        self._auto_unload = automatic
         return self.do("autounload", "on" if automatic else "off")
+
+    def set_autosave(self, automatic: bool) -> Reply:
+        """The engine's periodic autosave, or none.
+
+        Turn it off for any suite whose server process outlives the engine's sixty-second interval, because that
+        interval is **real** time even under manual ticks: game logic is frozen but the world clock is not, so the
+        threshold arrives on the wall clock and the save then runs on an arbitrary granted tick. The first autosave
+        of a process is also the expensive one -- it reloads the file system and starts copying the world on
+        another thread while the test keeps running.
+
+        Measured before this existed: of 734 harness boots in one day, 8 autosaved, each about 62 seconds in. The
+        suites that never saw it simply restart often enough that no process lives that long.
+        """
+        self._autosave = automatic
+        return self.do("autosave", "on" if automatic else "off")
 
     def expect(self, kind: str, *args) -> Reply:
         """The in-game assertion, kept for parity with scenarios. Prefer query plus assert."""

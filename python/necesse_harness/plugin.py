@@ -83,6 +83,22 @@ def harness_session(harness_server) -> Harness:
     harness.handshake()
     if harness_server.config.manual_ticks:
         harness.set_manual_ticks(True)
+        # Manual ticks and the automatic unload sweeps do not mix: a test granting hundreds of ticks
+        # crosses the sweep's thirty-one-second threshold with no wall-clock time passing, so the
+        # world can be dismantled underneath a long-running session for reasons that have nothing to
+        # do with what it is testing. See Unloading's own doc for the mechanism and the prior
+        # real-play bug this was found from. The synthetic player has no route to the per-tick
+        # keepLoaded() a real client's own region tracking would call, so the suite must suppress the
+        # sweep itself rather than rely on the engine to notice it is still "there".
+        harness.set_auto_unload(False)
+    # Deliberately outside the manual-ticks branch, unlike the unload sweep. Autosave watches *world* time,
+    # and both tick modes distort it in opposite directions: manual ticks freeze the game logic while the
+    # world clock keeps running at wall-clock rate, so the save arrives on real elapsed seconds and then
+    # executes on an arbitrary granted tick; clock mode scales the world delta by the time multiplier, so at
+    # x20 the engine's sixty-second interval arrives in three. Both were observed -- 62s into a manual boot,
+    # and 7s into an accelerated one. Either way a test ends up running against a world being saved,
+    # file-system-reloaded and copied to a backup on another thread. See Autosave's own doc.
+    harness.set_autosave(False)
     # One player for the session: containers are built from a player's inventory, so most verbs need
     # one, and spawning per test would be pure overhead.
     harness.spawn_player()

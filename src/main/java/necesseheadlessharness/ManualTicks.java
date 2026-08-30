@@ -3,6 +3,7 @@ package necesseheadlessharness;
 import java.util.concurrent.atomic.AtomicLong;
 
 import necesse.engine.gameLoop.tickManager.TickManager;
+import necesse.engine.network.server.Server;
 
 /**
  * Detaches game time from the wall clock, so a test grants ticks instead of waiting for them.
@@ -114,6 +115,19 @@ public final class ManualTicks {
    }
 
    /**
+    * The server loop's own {@link TickManager}, or null before the first frame.
+    *
+    * <p>Exposed so the {@code clocks} query can read the engine's own counters rather than the harness
+    * keeping a parallel set. The engine already tracks total ticks, expected ticks, skipped ticks and total
+    * frames, and those are the numbers that show how far the loop has drifted from the granted budget --
+    * which is invisible from Python otherwise, and was the reason the lockstep gap stayed an argument
+    * instead of a measurement.
+    */
+   public static TickManager loopTickManager() {
+      return loop;
+   }
+
+   /**
     * Switches to granting ticks explicitly.
     *
     * @return false if the server loop has not been seen yet, in which case nothing changed and the caller
@@ -147,6 +161,7 @@ public final class ManualTicks {
       if (manual) {
          manual = false;
          BUDGET.set(0L);
+         FRAMES.set(0L);
          tickManager.setMaxFPS(autoMaxFPS);
       }
 
@@ -169,6 +184,123 @@ public final class ManualTicks {
    /** Discards any unspent grant, so a failed run of ticks cannot leak into the next test. */
    public static void clearBudget() {
       BUDGET.set(0L);
+      FRAMES.set(0L);
+   }
+
+   /**
+    * The frame half of the budget, and the reason it exists.
+    *
+    * <p>{@code Server.frameTick} is deliberately *not* gated -- see {@link ServerFrameTickPatch} -- because
+    * it is where harness commands are drained and where packets are processed, so freezing it deadlocks the
+    * server. But its second half advances game state: {@code World.frameTick} runs the world clock and every
+    * level's entity movement. Leaving that on the loop's schedule made identical work advance it a variable
+    * number of times -- measured at 27 to 78 frame ticks for the same command sequence, a threefold spread
+    * against a granted-tick count that never varied at all.
+    *
+    * <p>So the split is: packets and the command queue keep running every loop iteration, while
+    * {@code World.frameTick} is budgeted exactly like a game tick. {@link WorldFrameTickPatch} claims from
+    * here.
+    */
+   private static final AtomicLong FRAMES = new AtomicLong();
+
+   /** How many world frame ticks have actually run, for {@code query clocks} to compare against granted ticks. */
+   private static final AtomicLong FRAMES_RUN = new AtomicLong();
+
+   /** @see #FRAMES */
+   public static long framesRun() {
+      return FRAMES_RUN.get();
+   }
+
+   /**
+    * Called from {@link WorldFrameTickPatch} to decide whether the world clock and entity movement advance.
+    *
+    * @return true to run the world frame tick, false to skip it
+    */
+   public static boolean claimFrame() {
+      if (!manual) {
+         FRAMES_RUN.incrementAndGet();
+         return true;
+      }
+
+      while (true) {
+         long current = FRAMES.get();
+         if (current <= 0L) {
+            return false;
+         }
+
+         if (FRAMES.compareAndSet(current, current - 1L)) {
+            FRAMES_RUN.incrementAndGet();
+            return true;
+         }
+      }
+   }
+
+   /**
+    * Runs one world frame tick immediately, the way the server loop would have.
+    *
+    * <p>Called by the {@code tick} verb after each granted tick, because the real loop alternates the two:
+    * {@code ServerGameLoop.update} runs {@code server.tick()} and then {@code server.frameTick(this)} on the
+    * same iteration. Before this, a burst of N ticks ran back to back with no frame tick between any of them,
+    * so movement was never integrated mid-burst and the world clock did not move at all during a settle --
+    * which is not what the same N ticks do in a real server.
+    *
+    * <p>{@code world.frameTick} is called rather than {@code server.frameTick} on purpose. The latter would
+    * re-enter {@link ServerFrameTickPatch}'s exit advice and drain the command queue from inside a command
+    * already being drained, which is a recursion this has no need to risk. What is skipped by going direct is
+    * packet processing -- already done every loop iteration -- and each client's {@code tickMovement}, which
+    * for a synthetic player with no input is inert.
+    *
+    * @return false if the loop has not been seen yet, so the caller can say so rather than silently skip
+    */
+   public static boolean runFrame(Server server) {
+      TickManager tickManager = loop;
+      if (tickManager == null || server == null || server.world == null) {
+         return false;
+      }
+
+      FRAMES.incrementAndGet();
+      fixedDeltaThread = Thread.currentThread();
+      try {
+         server.world.frameTick(tickManager);
+      } finally {
+         fixedDeltaThread = null;
+      }
+
+      return true;
+   }
+
+   /**
+    * The thread currently inside {@link #runFrame}, or null.
+    *
+    * <p>Fix one gave the world frame tick a deterministic *count*; this gives it a deterministic *size*.
+    * Everything downstream scales by {@code TickManager}'s delta, which is
+    * {@code (nanoTime - loopTime) / 1e6 * globalTimeMod} -- so a frame tick invoked from a tight burst of
+    * granted ticks measured microseconds, and the world clock effectively stopped: 0.0 world-ms per granted
+    * tick where a real server advances 50.
+    *
+    * <p><b>Scoped to a thread rather than pinned globally, and that is not fussiness.</b>
+    * {@code Server.frameTick} calls {@code getClient(i).tickMovement(tickManager.getDelta())} on *every*
+    * unpaced loop iteration, outside this gate. Pinning the accessor globally would therefore advance client
+    * movement by a full tick per loop iteration -- hundreds of times a second, faster and no less wrong than
+    * what it replaced. Only the window this class opens deliberately gets the fixed value.
+    *
+    * <p>A plain field is enough because {@link #runFrame} is synchronous on the server thread, and comparing
+    * the calling thread means work handed to {@code Level.executor()} mid-frame cannot pick the value up by
+    * accident.
+    *
+    * @see TickManagerDeltaPatch
+    */
+   private static volatile Thread fixedDeltaThread;
+
+   /**
+    * Whether the caller is inside a harness-driven world frame tick and should see one tick's worth of time.
+    *
+    * <p>Deliberately ignores {@code globalTimeMod}: under manual ticks a granted tick *is* a tick, and a test
+    * that wants more game time grants more ticks rather than scaling each one. Timescale remains the
+    * clock-mode knob it always was.
+    */
+   public static boolean isFixedDelta() {
+      return manual && Thread.currentThread() == fixedDeltaThread;
    }
 
    /**

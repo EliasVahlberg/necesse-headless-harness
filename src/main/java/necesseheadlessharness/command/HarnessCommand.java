@@ -17,10 +17,12 @@ import java.util.Arrays;
 
 import necesse.engine.commands.AutoComplete;
 import necesse.engine.gameLoop.tickManager.TickManager;
+import necesse.engine.world.WorldEntity;
 import necesse.engine.commands.ChatCommand;
 import necesseheadlessharness.HeadlessPlayer;
 import necesseheadlessharness.Harness;
 import necesseheadlessharness.Unloading;
+import necesseheadlessharness.Autosave;
 import necesseheadlessharness.Ticks;
 import necesseheadlessharness.ManualTicks;
 import necesseheadlessharness.ServerThreadTasks;
@@ -236,6 +238,8 @@ public class HarnessCommand extends ChatCommand {
                return this.load(level, spawn, server, args, logs);
             case "autounload":
                return this.autoUnload(args, logs);
+            case "autosave":
+               return this.autoSave(server, args, logs);
             default:
                TestVerb verb = Harness.verb(sub);
                if (verb == null) {
@@ -936,6 +940,12 @@ public class HarnessCommand extends ChatCommand {
       for (long i = 0L; i < count; i++) {
          try {
             server.tick();
+            // Then one world frame tick, because that is the order the real loop uses: ServerGameLoop.update
+            // runs server.tick() when isGameTick() and server.frameTick(this) on the same iteration. Without
+            // this a burst of N ticks ran with no frame between any of them, so the world clock stood still
+            // for the whole burst and entity movement was never integrated mid-settle -- N ticks here did not
+            // mean what N ticks mean on a real server.
+            ManualTicks.runFrame(server);
             ran++;
          } catch (Throwable failure) {
             // Reported rather than swallowed: a tick that throws is the interesting part of the run, and a
@@ -1176,6 +1186,35 @@ public class HarnessCommand extends ChatCommand {
    }
 
    /**
+    * {@code autosave on|off} — the engine's periodic autosave, or none. No argument reports the state.
+    *
+    * <p>Off is for any suite whose server process lives longer than the engine's sixty-second interval, which is
+    * measured in <b>real</b> time even under manual ticks: see {@link Autosave}. The save lands on an arbitrary
+    * granted tick, and the first one of a process also reloads the file system and starts copying the world in
+    * another thread, so a test can be running against a world being saved and copied underneath it.
+    *
+    * <p>On is the engine's own behaviour and the default, and turning it back on restarts the interval rather
+    * than firing immediately -- {@link Autosave#setAutomatic} explains why that differs from {@code autounload}.
+    */
+   private boolean autoSave(Server server, ArrayList<String> args, CommandLog logs) {
+      if (args.size() < 2) {
+         logs.add("PASS autosave " + (Autosave.isAutomatic() ? "on" : "off")
+            + ", interval " + Server.autoSaveIntervalInSec + "s");
+         return true;
+      }
+
+      String mode = args.get(1).toLowerCase();
+      if (!"on".equals(mode) && !"off".equals(mode)) {
+         logs.add("FAIL autosave wants 'on' or 'off', got '" + args.get(1) + "'");
+         return false;
+      }
+
+      Autosave.setAutomatic(server, "on".equals(mode));
+      logs.add("PASS autosave " + mode);
+      return true;
+   }
+
+   /**
     * The harness's own verbs, in one place.
     *
     * <p>They are still a {@code switch} rather than registered {@link TestVerb}s, which is a real
@@ -1187,13 +1226,13 @@ public class HarnessCommand extends ChatCommand {
    private static final List<String> BUILT_IN_VERBS = Arrays.asList(
       "place", "fill", "clear", "break", "give", "open", "close", "click", "craft", "quickstack",
       "restock", "expect", "query", "player", "run", "timescale", "ticks", "tick", "unload", "load",
-      "autounload", "echo", "hello", "rpc");
+      "autounload", "autosave", "echo", "hello", "rpc");
 
    /** Kinds {@code expect} and {@code query} both understand without a consumer mod. */
    // 'category' and 'categories' answer about the item registry rather than about the level, so they
    // are queries with no expect counterpart -- there is nothing to assert, only something to read.
    private static final List<String> BUILT_IN_KINDS =
-      Arrays.asList("item", "total", "held", "category", "categories", "tick", "region", "level");
+      Arrays.asList("item", "total", "held", "category", "categories", "tick", "clocks", "region", "level");
 
    /**
     * Structured fields for the reply currently being assembled, or null when a verb was invoked by
@@ -1367,7 +1406,40 @@ public class HarnessCommand extends ChatCommand {
             .num("loadedregions", level.regionManager.getLoadedRegionsSize())
             .bool("oneworldlevel", level.isOneWorldLevel())
             .num("unloadsat", 20 * Math.max(2, Unloading.cooldownSeconds()))
-            .bool("autounload", Unloading.isAutomatic());
+            .bool("autounload", Unloading.isAutomatic())
+            .bool("autosave", Autosave.isAutomatic());
+      } else if ("clocks".equals(kind)) {
+         // Every clock the server runs, side by side, because they are not the same clock and treating them
+         // as one is the root of the harness's remaining non-determinism.
+         //
+         // 'granted' is the only one the harness controls. The rest are the engine's own counters, derived in
+         // TickManager.tickLogic from System.nanoTime() and advanced by the *loop* -- so they keep moving while
+         // manual mode is skipping ungranted ticks, and 'frames' in particular is unbounded: Server.frameTick
+         // is patched OnMethodExit, so the original runs in full on every unpaced loop iteration.
+         //
+         // Reported rather than fixed, deliberately and for now. Anything scheduled off these counters
+         // (mob despawn rolls on getTick()==1, buffs on getTotalTicks() % n) fires on wall-clock time in a
+         // world whose logic is frozen, and no test can see that happening without these numbers.
+         TickManager loop = ManualTicks.loopTickManager();
+         WorldEntity worldEntity = server.world.worldEntity;
+         data.num("granted", Ticks.count())
+            .bool("manual", ManualTicks.isManual())
+            .num("budgetleft", ManualTicks.remaining());
+         if (loop == null) {
+            // Only before the first frame, which a client cannot normally observe -- but reporting a zero
+            // would read as a stopped clock rather than as an unanswered question.
+            data.bool("loopseen", false);
+         } else {
+            data.bool("loopseen", true)
+               .num("totalticks", loop.getTotalTicks())
+               .num("expectedticks", loop.getTotalExpectedTicks())
+               .num("skippedticks", loop.getSkippedTicks())
+               .num("frames", loop.getTotalFrames())
+               .num("worldframes", ManualTicks.framesRun())
+               .num("tickinsecond", loop.getTick());
+         }
+
+         data.num("time", worldEntity.getTime()).num("worldtime", worldEntity.getWorldTime());
       } else if ("total".equals(kind)) {
          data.str("item", args.get(2)).num("count", this.totalOf(level, args.get(2)));
       } else if ("held".equals(kind)) {

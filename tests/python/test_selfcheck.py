@@ -178,6 +178,79 @@ def test_a_region_is_sixteen_tiles_so_nearby_offsets_share_one(harness):
     assert (far["regionx"], far["regiony"]) != (far["playerregionx"], far["playerregiony"])
 
 
+def test_an_identical_sequence_consumes_an_identical_number_of_ticks(harness):
+    """The lockstep guarantee, asserted rather than assumed.
+
+    This is the property the whole manual-tick model exists to provide: the same commands must cost the
+    same amount of game time, every time, so a test's outcome cannot depend on how busy the machine was.
+    It holds -- measured at zero spread over five repetitions -- and it is worth a permanent guard because
+    it is the one clock a test may legitimately depend on.
+
+    The engine's *other* clocks deliberately have no such guarantee and are not asserted here:
+    ``TickManager``'s counters and the world clock are derived from ``System.nanoTime()`` and advanced by
+    the loop, so ``frames``, ``totalticks`` and ``worldtime`` vary run to run by design. See
+    ``docs/debug-data/probe_clocks.py`` for the measurement and ``DEBUG_JOURNAL.md`` for what that costs.
+    """
+    def sequence() -> int:
+        before = harness.query("clocks")["granted"]
+        harness.place("storagebox", 2, 0)
+        harness.fill(2, 0, "ironbar", 40)
+        harness.settle(5)
+        harness.do("break", "2", "0")
+        harness.settle(5)
+        return harness.query("clocks")["granted"] - before
+
+    costs = [sequence() for _ in range(3)]
+    assert len(set(costs)) == 1, f"identical work cost different amounts of game time: {costs}"
+
+
+def test_a_granted_tick_is_worth_exactly_one_tick_of_time(harness):
+    """The clock contract: every game-state clock advances per granted tick, not per wall-clock second.
+
+    Manual mode originally gated ``Server.tick`` and nothing else, so three other clocks ran free and made
+    identical work advance the world by different amounts. Measured over five repetitions of one command
+    sequence: the world frame tick ran 27 to 78 times, the world clock moved 39 to 103ms, and the engine's own
+    tick counter advanced 1 to 3 -- against a granted-tick count that was 110 every time.
+
+    All three are now driven by the budget, so this asserts the exchange rate rather than a spread:
+
+    * one world frame tick per granted tick -- ``WorldFrameTickPatch``
+    * 50ms of world time per granted tick, the engine's own ``msPerTick`` -- ``TickManagerFullDeltaPatch``
+    * one engine tick counted per granted tick -- ``TickManagerTotalTicksPatch``
+
+    The raw loop frame count is deliberately *not* asserted. It still varies, and must: that is the unpaced
+    iteration that pumps packets and drains the command queue, and freezing it would deadlock the server.
+    """
+    ticks = 40
+    before = harness.query("clocks")
+    harness.step(ticks)
+    after = harness.query("clocks")
+
+    assert after["granted"] - before["granted"] == ticks
+    assert after["worldframes"] - before["worldframes"] == ticks, "world frame ticks must track granted ticks"
+    assert after["totalticks"] - before["totalticks"] == ticks, "the engine's tick counter must track them too"
+    assert after["worldtime"] - before["worldtime"] == ticks * 50, "50ms of world time per tick"
+
+
+def test_the_clocks_query_separates_the_budget_from_the_wall_clock(harness):
+    """Names the distinction in a test, so it cannot quietly stop being reported.
+
+    Before this query the gap between granted ticks and the engine's own counters was invisible from
+    Python, which is why it stayed an argument instead of a measurement for as long as it did.
+    """
+    clocks = harness.query("clocks")
+    assert clocks["manual"] is True, "the session fixture should be in manual mode"
+    assert clocks["loopseen"] is True, "the frame patch should have handed over the loop's TickManager"
+
+    # The budget is spent, not accumulated: a granted tick is claimed by the tick that runs it.
+    assert clocks["budgetleft"] == 0
+    assert clocks["granted"] > 0
+
+    # Frame ticks are not budgeted -- Server.frameTick is patched OnMethodExit, so the original runs on
+    # every unpaced loop iteration. There are always more frames than the harness ever asked for.
+    assert clocks["frames"] > 0
+
+
 def test_the_sweep_can_be_suppressed_and_restored(harness):
     """The flag has to be visible, or a test cannot tell which regime it is running under.
 
@@ -195,3 +268,50 @@ def test_the_sweep_can_be_suppressed_and_restored(harness):
 
     assert harness.query("region", 0, 2)["autounload"]
     assert harness.query("region", 0, 2)["unloadsat"] == 31 * 20
+
+    # Put the session's own regime back. Restoring to the *engine* default above is the point of the
+    # assertion, but leaving it there would hand every later test in the session a world with the sweeps
+    # running -- which is precisely the contamination this switch exists to prevent.
+    harness.set_auto_unload(False)
+
+
+def test_autosave_can_be_suppressed_and_restored(harness):
+    """Autosave is real and it lands mid-test, so the flag has to be readable like the sweep's.
+
+    Suppressed by the fixture, because the interval is measured in world time and world time keeps
+    running at wall-clock rate even while manual ticks hold the game logic still -- so any process that
+    lives a minute gets a save, a file-system reload and a world copy on another thread, at a moment
+    decided by nothing the test controls.
+    """
+    assert not harness.query("level")["autosave"], "the session fixture should suppress autosave"
+
+    try:
+        harness.set_autosave(True)
+        assert harness.query("level")["autosave"]
+    finally:
+        harness.set_autosave(False)
+
+    assert not harness.query("level")["autosave"]
+
+
+@pytest.mark.slow
+def test_the_server_side_switches_survive_a_restart(harness):
+    """A fresh JVM resets them, and for a long time nothing put them back.
+
+    This is the regression guard for a real gap rather than a hypothetical one: suppression lives in
+    static state inside the server process, so every test after the first restart silently ran with the
+    engine's defaults restored. Nothing reported it, and the suite still asked for suppression exactly
+    once, at session start.
+
+    Both switches are set here rather than inherited from the fixture, so this asserts what it says it
+    does regardless of what ran before it in the shared session.
+    """
+    harness.set_auto_unload(False)
+    harness.set_autosave(False)
+    assert not harness.query("level")["autounload"]
+    assert not harness.query("level")["autosave"]
+
+    harness.restart()
+
+    assert not harness.query("level")["autounload"], "restart lost the unload suppression"
+    assert not harness.query("level")["autosave"], "restart lost the autosave suppression"
