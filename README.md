@@ -191,6 +191,7 @@ Generic, because they can be said without knowing your mod:
 | Verb | Meaning |
 |---|---|
 | `place <object> <dx> <dy>` | by object string ID, or an alias you registered |
+| `tile <tile> <dx> <dy>` | force-write one terrain cell by tile string ID; the report names what it replaced |
 | `break <dx> <dy>` | remove it |
 | `fill <dx> <dy> <item> <n>` | into whatever holds an inventory there |
 | `clear <radius> [tile]` | flatten an area around spawn |

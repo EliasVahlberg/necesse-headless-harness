@@ -198,6 +198,8 @@ public class HarnessCommand extends ChatCommand {
          switch (sub) {
             case "place":
                return this.place(level, spawn, args, logs);
+            case "tile":
+               return this.tile(level, spawn, args, logs);
             case "fill":
                return this.fill(level, spawn, args, logs);
             case "break":
@@ -284,6 +286,32 @@ public class HarnessCommand extends ChatCommand {
       level.setObject(x, y, objectID);
       ObjectRegistry.getObject(objectID).placeObject(level, 0, x, y, 0, false);
       logs.add("placed " + what + " at " + args.get(2) + "," + args.get(3));
+      return true;
+   }
+
+   /**
+    * Force-writes one tile of the terrain layer: the tile-layer sibling of {@code place}, for the same reason.
+    * Laws that read the world (an AP aquaculture plot demanding WATER next to its tile) need terrain facts at
+    * exact coordinates, and {@code clear}'s paint is a spawn-centered disc that would wreck the bench and
+    * settlement zones to reach them. One cell at a time is the surgical version.
+    *
+    * <p>Reports the ID it replaced: a world-authoring verb that does not say what it removed is how a suite
+    * loses track of its own fixtures — a scenario can only restore a tile whose name it was told.
+    */
+   private boolean tile(Level level, Point spawn, ArrayList<String> args, CommandLog logs) {
+      String what = args.get(1).toLowerCase();
+      int x = spawn.x + Integer.parseInt(args.get(2));
+      int y = spawn.y + Integer.parseInt(args.get(3));
+
+      int tileID = TileRegistry.getTileID(what);
+      if (tileID < 0) {
+         logs.add("FAIL unknown tile '" + what + "'; pass a tile string ID (e.g. watertile, dirttile, emptytile)");
+         return false;
+      }
+
+      int was = level.getTileID(x, y);
+      level.setTile(x, y, tileID);
+      logs.add("tile " + x + "," + y + ": " + TileRegistry.getTileStringID(was) + " -> " + what);
       return true;
    }
 
@@ -1224,7 +1252,7 @@ public class HarnessCommand extends ChatCommand {
     * derived from.
     */
    private static final List<String> BUILT_IN_VERBS = Arrays.asList(
-      "place", "fill", "clear", "break", "give", "open", "close", "click", "craft", "quickstack",
+      "place", "tile", "fill", "clear", "break", "give", "open", "close", "click", "craft", "quickstack",
       "restock", "expect", "query", "player", "run", "timescale", "ticks", "tick", "unload", "load",
       "autounload", "autosave", "echo", "hello", "rpc");
 
@@ -1588,6 +1616,7 @@ public class HarnessCommand extends ChatCommand {
 
    static {
       COORDINATE_ARG.put("place", 2);
+      COORDINATE_ARG.put("tile", 2);
       COORDINATE_ARG.put("expect", 2);
       // query shares expect's argument positions, minus the expected values at the end.
       COORDINATE_ARG.put("query", 2);

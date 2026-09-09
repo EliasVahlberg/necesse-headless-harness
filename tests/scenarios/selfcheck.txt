@@ -19,6 +19,13 @@ harness clear 8
 harness place storagebox 3 0
 harness expect item 3 0 ironbar 0
 
+# The terrain layer, one cell at a time: paint water, put ordinary dirt back. This is how a law
+# that reads the world (a mod demanding water next to its tile) gets a wet fixture at an exact
+# coordinate without clear's disc. The second line also double-checks the first: its report names
+# the ID the verb replaced, which is the only way a suite learns what it is overwriting.
+harness tile watertile 5 2
+harness tile dirttile 5 2
+
 harness fill 3 0 ironbar 25
 harness expect item 3 0 ironbar 25
 harness expect total ironbar 25
