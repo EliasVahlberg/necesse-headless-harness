@@ -279,6 +279,12 @@ done
 # So: ask for a save while the server is definitely alive, confirm it completed, and only then
 # stop. If the confirmation never arrives, say so loudly rather than letting the next boot
 # report a mystery.
+#
+# The clock comes back first, as in the Python client's close() and restart(): saving and the
+# clean shutdown both run on game ticks, so a scenario that left `ticks manual` in force froze
+# the save at "Starting save..." and the stop behind it, and every such run died on the 30s kill.
+# Harmless when the scenario never went manual.
+printf 'harness ticks auto\n' >&3
 printf 'save\n' >&3
 SAVED=0
 for _ in $(seq 1 60); do
