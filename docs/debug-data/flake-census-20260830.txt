@@ -1,0 +1,7 @@
+===== run 3 =====
+274 passed, 1 xfailed in 50.91s
+===== run 4 =====
+FAILED tests/python/test_multitile_containers.py::test_a_bus_finds_a_wide_container_from_either_half
+1 failed, 273 passed, 1 xfailed in 53.21s
+===== run 5 =====
+274 passed, 1 xfailed in 51.86s
