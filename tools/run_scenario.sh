@@ -119,12 +119,15 @@ fi
 # installed copy is what the server loads. Getting this wrong presents as a verb the harness "does not
 # have", with a usage line listing the verbs of whichever build is installed. Cheap to detect,
 # confusing to diagnose, so check rather than document.
-INSTALLED_KIT="$(ls -1t "$HOME/.config/Necesse/mods"/NecesseHeadlessHarness-*.jar 2>/dev/null | head -1)"
+# The game's data dir: saves, mods/modlist.data, cfg. NECESSE_APPDATA moves it, as in the Python
+# client; it is passed to the server as -datadir, so the one directory checked is the one written.
+APPDATA="${NECESSE_APPDATA:-$HOME/.config/Necesse}"
+INSTALLED_KIT="$(ls -1t "$APPDATA/mods"/NecesseHeadlessHarness-*.jar 2>/dev/null | head -1)"
 BUILT_KIT="$(ls -1t "$KIT_DIR/build/jar"/NecesseHeadlessHarness-*.jar 2>/dev/null | head -1)"
 
 if [[ -z "$INSTALLED_KIT" ]]; then
    echo "FAIL  the harness is not installed. Run 'make install' in the kit: the game loads it from" >&2
-   echo "      ~/.config/Necesse/mods, because -mod accepts only one dev mod and your mod has it." >&2
+   echo "      $APPDATA/mods, because -mod accepts only one dev mod and your mod has it." >&2
    exit 2
 fi
 
@@ -152,7 +155,7 @@ fi
 # Scenarios must start from a known world or they are not repeatable: objects placed by an
 # earlier run would still be there. Only ever deletes a world whose name marks it as
 # harness-owned, so a world used for manual testing can never be destroyed by a typo.
-WORLD_FILE="$HOME/.config/Necesse/saves/worlds/$WORLD.zip"
+WORLD_FILE="$APPDATA/saves/worlds/$WORLD.zip"
 if [[ "$KEEP_WORLD" -eq 1 ]]; then
    if [[ ! -f "$WORLD_FILE" ]]; then
       echo "FAIL  --keep needs an existing world at $WORLD_FILE; run the writing phase first" >&2
@@ -192,9 +195,13 @@ CRASH_BEFORE="$(stat -c %Y "$CRASH_LOG" 2>/dev/null || echo 0)"
 # deadlock came to look like a 400-second test run rather than a failure.
 DEADLINE="${HARNESS_DEADLINE:-180}"
 
+# Any free port: the runner never connects over the network, and the engine's fixed default made two
+# servers on one machine collide (BindException). HARNESS_PORT pins one, to attach a real client.
+PORT="${HARNESS_PORT:-$(python3 -c 'import socket; s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')}"
+
 ( cd "$GAME_DIR" && "$JAVA" -Dnecesseheadlessharness.scenarios="$SCENARIO_DIR" -jar Server.jar \
       -nogui -log_debug_prints -hiddencheats \
-      -world "$WORLD" \
+      -world "$WORLD" -datadir "$APPDATA" -port "$PORT" \
       ${MOD_UNDER_TEST:+-mod "$MOD_UNDER_TEST/"} ) < "$FIFO" > "$LOG" 2>&1 &
 SERVER_PID=$!
 

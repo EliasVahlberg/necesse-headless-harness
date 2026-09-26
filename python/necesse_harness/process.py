@@ -21,6 +21,7 @@ session to learn:
 from __future__ import annotations
 
 import os
+import socket
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -40,6 +41,21 @@ class ServerDied(HarnessError):
     pass
 
 
+def free_udp_port() -> int:
+    """A UDP port nothing is bound to right now, chosen by the kernel.
+
+    The harness never talks to the server over the network (commands go in on stdin, replies come
+    back through the rpc file), so the game port only has to be *somebody else's* port. Left at the
+    engine's default, two servers on one machine both bind 14159 and the second dies with
+    BindException -- two worktrees, or two mods' suites, could not run side by side. There is a
+    window between closing this socket and the JVM binding the number; a collision there fails
+    loudly at boot rather than silently.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
 @dataclass
 class ServerConfig:
     """Where things are. Every field has an environment variable so a consumer needs no code."""
@@ -49,6 +65,10 @@ class ServerConfig:
 
     appdata: Path = field(default_factory=lambda: Path(
         os.environ.get("NECESSE_APPDATA", DEFAULT_APPDATA)))
+
+    #: The server's game port, or 0 to take a free one at each boot (the default; see
+    #: :func:`free_udp_port`). Pin it with HARNESS_PORT only to connect a real client to a run.
+    port: int = field(default_factory=lambda: int(os.environ.get("HARNESS_PORT", "0")))
 
     #: The dev mod folder holding exactly one jar, or None to run the harness by itself. None is a
     #: legitimate case: it is how the harness checks whether it works in this install at all.
@@ -314,6 +334,13 @@ class HarnessServer:
             # Without this every command answers with the achievements warning and does nothing.
             "-hiddencheats",
             "-world", self.config.world,
+            # The engine reads and writes its whole data dir (saves, mods/modlist.data, cfg, logs)
+            # under this path. Without it the server always uses ~/.config/Necesse, whatever
+            # `appdata` says -- so a run pointed at another appdata checked one directory and wrote
+            # another, and two checkouts could never run apart. Passing it for the default too is a
+            # no-op there (the engine's own Linux default), which keeps one code path.
+            "-datadir", str(self.config.appdata),
+            "-port", str(self.config.port or free_udp_port()),
         ]
         # Passed as a property rather than a command because generation happens during boot, before the
         # command queue exists -- there is no moment at which a verb could pin it in time. Omitted entirely
